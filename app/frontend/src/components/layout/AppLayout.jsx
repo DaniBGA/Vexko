@@ -40,20 +40,19 @@ export default function AppLayout() {
 
           <div className="nav-section-label">Inventario</div>
           <Link to="/stock" className={`nav-link ${isActive('/stock') ? 'active' : ''}`}><span className="icon"><Box size={16} /></span>Stock</Link>
-          <Link to="/precios" className={`nav-link ${isActive('/precios') ? 'active' : ''}`}><span className="icon"><Tag size={16} /></span>Actualizar precios</Link>
 
           <div className="nav-section-label">Finanzas</div>
           <Link to="/caja-flujo" className={`nav-link ${isActive('/caja-flujo') ? 'active' : ''}`}><span className="icon"><CreditCard size={16} /></span>Gastos</Link>
-          <Link to="/afip" className={`nav-link ${isActive('/afip') ? 'active' : ''}`}><span className="icon"><FileText size={16} /></span>Facturación</Link>
+          <div className={`nav-link disabled`} title="En desarrollo" style={{opacity:0.7,display:'flex',alignItems:'center',gap:8,cursor:'default'}}><span className="icon"><FileText size={16} /></span>Facturación <span style={{color:'#999',fontSize:'.75rem',marginLeft:6}}>(En desarrollo)</span></div>
           <Link to="/resultados" className={`nav-link ${isActive('/resultados') ? 'active' : ''}`}><span className="icon"><PieChart size={16} /></span>Resultados del mes</Link>
 
           <div className="nav-section-label">Gestión</div>
           <Link to="/proveedores" className={`nav-link ${isActive('/proveedores') ? 'active' : ''}`}><span className="icon"><Users size={16} /></span>Proveedores</Link>
           <Link to="/caja" className={`nav-link ${isActive('/caja') ? 'active' : ''}`}><span className="icon"><Home size={16} /></span>Caja</Link>
-          <Link to="/clientes" className={`nav-link ${isActive('/clientes') ? 'active' : ''}`}><span className="icon"><Users size={16} /></span>Clientes / Puntos</Link>
+          <div className={`nav-link disabled`} title="En desarrollo" style={{opacity:0.7,display:'flex',alignItems:'center',gap:8,cursor:'default'}}><span className="icon"><Users size={16} /></span>Clientes / Puntos <span style={{color:'#999',fontSize:'.75rem',marginLeft:6}}>(En desarrollo)</span></div>
         </nav>
 
-        <div style={{padding:16}}>
+        <div className="sidebar-footer">
           <button onClick={handleLogout} className="btn-outline" style={{width:'100%'}}>Cerrar sesión</button>
         </div>
       </aside>

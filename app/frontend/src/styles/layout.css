@@ -1,8 +1,8 @@
 /* Layout styles (sidebar, topbar, app shell) */
-.app-shell{display:flex;min-height:100vh;overflow:hidden}
+.app-shell{display:flex;min-height:100vh}
 
 /* Sidebar */
-.sidebar{width:220px;background:var(--sidebar-bg);color:#cbd5ff;flex-shrink:0;display:flex;flex-direction:column}
+.sidebar{width:260px;max-width:320px;background:var(--sidebar-bg);color:#cbd5ff;flex-shrink:0;display:flex;flex-direction:column;position:fixed;top:0;left:0;bottom:0;height:100vh;z-index:20}
 .sidebar-logo{padding:20px 18px 16px;border-bottom:1px solid rgba(255,255,255,0.06)}
 .logo-name{font-size:1rem;font-weight:800;color:#fff}
 .logo-sub{font-size:0.7rem;color:var(--muted);margin-top:2px}
@@ -12,6 +12,8 @@
 .kiosk-plan{font-size:0.68rem;color:var(--muted)}
 
 .sidebar-nav{padding:10px 0;flex:1;overflow:auto}
+
+.sidebar-footer{padding:16px;border-top:1px solid rgba(255,255,255,0.03);background:linear-gradient(180deg,transparent,rgba(0,0,0,0.02));}
 .nav-section-label{font-size:0.62rem;font-weight:700;color:#5a6399;padding:10px 18px 5px}
 .nav-link{display:flex;align-items:center;gap:10px;padding:9px 18px;color:#b7c0e6;font-size:0.83rem;cursor:pointer;border:none;background:none;width:100%;text-align:left}
 .nav-link:hover{background:rgba(255,255,255,0.04);color:#fff}
@@ -19,11 +21,11 @@
 .nav-link .badge{margin-left:auto;background:#e74c3c;color:#fff;font-size:0.62rem;font-weight:700;border-radius:10px;padding:1px 6px}
 
 /* Main content and topbar */
-.main-content{flex:1;display:flex;flex-direction:column;background:var(--bg-page)}
+.main-content{flex:1;display:flex;flex-direction:column;background:var(--bg-page);margin-left:260px}
 .topbar{background:var(--card-bg);border-bottom:1px solid #e8eaf0;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:10}
 .topbar h1{font-size:1.05rem;font-weight:700;color:var(--brand-dark)}
 .topbar .topbar-actions{display:flex;gap:10px;align-items:center}
 
 .page-body{padding:24px}
 
-@media (max-width:768px){.sidebar{display:none}.page-body{padding:12px}}
+@media (max-width:768px){.sidebar{display:none}.page-body{padding:12px}.main-content{margin-left:0}}

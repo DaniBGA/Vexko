@@ -17,13 +17,13 @@ reportsRouter.get('/monthly', async (req, res, next) => {
 
     const [salesAgg, saleItems, cashFlows, prevSalesAgg] = await Promise.all([
       prisma.sale.aggregate({
-        _sum: { total: true, cashAmount: true, cardAmount: true },
+        _sum: { total: true, cashAmount: true, cardAmount: true, transferAmount: true },
         _count: { id: true },
         where: { createdAt: { gte: from, lte: to } },
       }),
       prisma.saleItem.findMany({
         where: { sale: { createdAt: { gte: from, lte: to } } },
-        include: { product: { select: { name: true, subcategory: { select: { name: true } } } } },
+        include: { product: { select: { id: true, name: true, costPrice: true, subcategory: { select: { name: true } } } } },
       }),
       prisma.cashFlow.findMany({
         where: { type: 'EXPENSE', createdAt: { gte: from, lte: to } },
@@ -43,7 +43,10 @@ reportsRouter.get('/monthly', async (req, res, next) => {
 
     const revenue = parseFloat(salesAgg._sum.total || 0);
     const totalExpenses = cashFlows.reduce((s, f) => s + parseFloat(f.amount), 0);
-    const cogs = saleItems.reduce((s, i) => s + parseFloat(i.costPrice) * i.quantity, 0);
+    const cogs = saleItems.reduce((s, i) => {
+      const cost = i.product?.costPrice ?? 0;
+      return s + parseFloat(cost || 0) * i.quantity;
+    }, 0);
     const grossProfit = revenue - cogs;
     const grossMargin = revenue > 0 ? (grossProfit / revenue) * 100 : 0;
     const netProfit = grossProfit - totalExpenses;
@@ -75,10 +78,37 @@ reportsRouter.get('/monthly', async (req, res, next) => {
       avgTicket: Math.round(avgTicket),
       cashSales: parseFloat(salesAgg._sum.cashAmount || 0),
       cardSales: parseFloat(salesAgg._sum.cardAmount || 0),
+      transferSales: parseFloat(salesAgg._sum.transferAmount || 0),
       prevRevenue,
       revenueGrowth: Math.round(revenueGrowth * 10) / 10,
       topProducts,
       expenseBreakdown: cashFlows,
+      // Last 3 months comparison (current, prev, prev2)
+      threeMonthComparison: await (async () => {
+        const months = [];
+        for (let i = 0; i < 3; i++) {
+          const m = month - i;
+          const y = year + Math.floor(m / 12);
+          const mm = ((m % 12) + 12) % 12; // normalized month index
+          const fromM = new Date(y, mm, 1);
+          const toM = new Date(y, mm + 1, 0, 23, 59, 59);
+
+          const [agg, items, flows] = await Promise.all([
+            prisma.sale.aggregate({ _sum: { total: true }, _count: { id: true }, where: { createdAt: { gte: fromM, lte: toM } } }),
+            prisma.saleItem.findMany({ where: { sale: { createdAt: { gte: fromM, lte: toM } } }, include: { product: { select: { costPrice: true } } } }),
+            prisma.cashFlow.findMany({ where: { type: 'EXPENSE', createdAt: { gte: fromM, lte: toM } } }),
+          ]);
+
+          const rev = parseFloat(agg._sum.total || 0);
+          const cogsMonth = items.reduce((s, it) => s + (parseFloat(it.product?.costPrice || 0) * it.quantity), 0);
+          const expensesMonth = flows.reduce((s, f) => s + parseFloat(f.amount), 0);
+          const gross = rev - cogsMonth;
+          const margin = rev > 0 ? Math.round(((gross / rev) * 100) * 10) / 10 : 0;
+
+          months.push({ month: mm + 1, year: y, revenue: rev, grossProfit: gross, margin, expenses: expensesMonth });
+        }
+        return months;
+      })(),
     });
   } catch (err) { next(err); }
 });
