@@ -33,7 +33,7 @@ invoicesRouter.post('/', async (req, res, next) => {
 
     const invoice = await prisma.invoice.create({
       data: {
-        saleId: saleId ? parseInt(saleId) : null,
+        saleId: saleId || null,
         invoiceType,
         invoiceNumber,
         total: parseFloat(total),

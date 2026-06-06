@@ -15,9 +15,9 @@ cashFlowRouter.get('/', async (req, res, next) => {
     if (period === 'week') from = new Date(now.getTime() - 7 * 86400000);
 
     const flows = await prisma.cashFlow.findMany({
-      where: { date: { gte: from } },
+      where: { createdAt: { gte: from } },
       include: { user: { select: { name: true } } },
-      orderBy: { date: 'desc' },
+      orderBy: { createdAt: 'desc' },
     });
 
     const totals = flows.reduce(
@@ -43,7 +43,7 @@ cashFlowRouter.post('/', async (req, res, next) => {
         amount: parseFloat(amount),
         concept,
         category,
-        date: date ? new Date(date) : undefined,
+        createdAt: date ? new Date(date) : undefined,
       },
     });
     res.status(201).json(flow);
@@ -52,7 +52,7 @@ cashFlowRouter.post('/', async (req, res, next) => {
 
 cashFlowRouter.delete('/:id', async (req, res, next) => {
   try {
-    await prisma.cashFlow.delete({ where: { id: parseInt(req.params.id) } });
+    await prisma.cashFlow.delete({ where: { id: req.params.id } });
     res.status(204).end();
   } catch (err) { next(err); }
 });

@@ -26,7 +26,7 @@ categoriesRouter.post('/', async (req, res, next) => {
 categoriesRouter.post('/:id/subcategories', async (req, res, next) => {
   try {
     const sub = await prisma.subcategory.create({
-      data: { name: req.body.name, categoryId: parseInt(req.params.id) },
+      data: { name: req.body.name, categoryId: req.params.id },
     });
     res.status(201).json(sub);
   } catch (err) { next(err); }

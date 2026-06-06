@@ -178,6 +178,7 @@ export default function SalePage() {
                           <ScanSearch size={14} className="text-gray-400 flex-shrink-0" />
                           <span>{p.name}</span>
                           {p.isCustom && <span className="text-[10px] uppercase tracking-wide bg-brand-greenBg text-green-700 px-2 py-0.5 rounded-full">Propio</span>}
+                          <span className="text-[10px] uppercase tracking-wide bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full">{p.loadMode === 'unit' ? 'Unidad' : 'Pack'}</span>
                         </div>
                         <div className="flex items-center gap-3 mt-0.5 text-xs text-gray-400">
                           <span className={`font-700 ${p.stock <= p.minStock ? 'text-red-600' : 'text-green-700'}`}>

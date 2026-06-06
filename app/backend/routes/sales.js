@@ -8,11 +8,27 @@ salesRouter.use(requireAuth);
 
 const MAX_HISTORY_MONTHS = 2;
 const DEFAULT_HISTORY_LIMIT = 10;
+const SALES_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+let lastSalesCleanupAt = 0;
 
 function getHistoryCutoff() {
   const cutoff = new Date();
   cutoff.setMonth(cutoff.getMonth() - MAX_HISTORY_MONTHS);
   return cutoff;
+}
+
+export async function cleanupOldSales(force = false) {
+  const now = Date.now();
+  if (!force && now - lastSalesCleanupAt < SALES_CLEANUP_INTERVAL_MS) {
+    return;
+  }
+
+  lastSalesCleanupAt = now;
+  const cutoff = getHistoryCutoff();
+  await prisma.sale.deleteMany({
+    where: { createdAt: { lt: cutoff } },
+  });
 }
 
 function normalizeLimit(limit) {
@@ -116,10 +132,6 @@ salesRouter.get('/', async (req, res, next) => {
     const safeLimit = normalizeLimit(limit);
     const requestedPage = normalizePage(page);
     const cutoff = getHistoryCutoff();
-
-    await prisma.sale.deleteMany({
-      where: { createdAt: { lt: cutoff } },
-    });
 
     const where = { createdAt: { gte: cutoff } };
     const total = await prisma.sale.count({ where });

@@ -9,6 +9,7 @@ import morgan from 'morgan';
 import { authRouter } from './routes/auth.js';
 import { productsRouter } from './routes/products.js';
 import { salesRouter } from './routes/sales.js';
+import { cleanupOldSales } from './routes/sales.js';
 import { suppliersRouter } from './routes/suppliers.js';
 import { cashFlowRouter } from './routes/cashflow.js';
 import { cashRegisterRouter } from './routes/cashRegister.js';
@@ -61,3 +62,13 @@ app.listen(PORT, () => {
   console.log(`\n🏪 Kiosco API corriendo en http://localhost:${PORT}`);
   console.log(`   Ambiente: ${process.env.NODE_ENV}\n`);
 });
+
+cleanupOldSales().catch((err) => {
+  console.error('[cleanupOldSales] error:', err);
+});
+
+setInterval(() => {
+  cleanupOldSales().catch((err) => {
+    console.error('[cleanupOldSales] error:', err);
+  });
+}, 24 * 60 * 60 * 1000);

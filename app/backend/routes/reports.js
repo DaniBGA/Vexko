@@ -26,7 +26,7 @@ reportsRouter.get('/monthly', async (req, res, next) => {
         include: { product: { select: { name: true, subcategory: { select: { name: true } } } } },
       }),
       prisma.cashFlow.findMany({
-        where: { type: 'EXPENSE', date: { gte: from, lte: to } },
+        where: { type: 'EXPENSE', createdAt: { gte: from, lte: to } },
       }),
       // Mes anterior
       prisma.sale.aggregate({

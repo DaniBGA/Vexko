@@ -39,7 +39,7 @@ export default function AppLayout() {
           <Link to="/historial" className={`nav-link ${isActive('/historial') ? 'active' : ''}`}><span className="icon"><ClipboardList size={16} /></span>Historial de ventas</Link>
 
           <div className="nav-section-label">Inventario</div>
-          <Link to="/stock" className={`nav-link ${isActive('/stock') ? 'active' : ''}`}><span className="icon"><Box size={16} /></span>Stock<span className="badge">2</span></Link>
+          <Link to="/stock" className={`nav-link ${isActive('/stock') ? 'active' : ''}`}><span className="icon"><Box size={16} /></span>Stock</Link>
           <Link to="/precios" className={`nav-link ${isActive('/precios') ? 'active' : ''}`}><span className="icon"><Tag size={16} /></span>Actualizar precios</Link>
 
           <div className="nav-section-label">Finanzas</div>

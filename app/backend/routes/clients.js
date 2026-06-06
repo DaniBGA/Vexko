@@ -12,7 +12,7 @@ clientsRouter.get('/', async (req, res, next) => {
     const where = {};
     if (search) {
       where.OR = [
-        { name: { contains: search, mode: 'insensitive' } },
+        { name: { contains: search } },
         { phone: { contains: search } },
       ];
     }
@@ -41,7 +41,7 @@ clientsRouter.get('/:id', async (req, res, next) => {
   try {
     const [client, rule] = await Promise.all([
       prisma.client.findUniqueOrThrow({
-        where: { id: parseInt(req.params.id) },
+        where: { id: req.params.id },
         include: {
           sales: {
             include: { items: { include: { product: { select: { name: true } } } } },
@@ -72,7 +72,7 @@ clientsRouter.post('/', async (req, res, next) => {
 clientsRouter.put('/:id', async (req, res, next) => {
   try {
     const client = await prisma.client.update({
-      where: { id: parseInt(req.params.id) },
+      where: { id: req.params.id },
       data: req.body,
     });
     res.json(client);
@@ -82,7 +82,7 @@ clientsRouter.put('/:id', async (req, res, next) => {
 // Canjear puntos
 clientsRouter.post('/:id/redeem', async (req, res, next) => {
   try {
-    const clientId = parseInt(req.params.id);
+    const clientId = req.params.id;
     const rule = await prisma.loyaltyRule.findFirstOrThrow({ where: { active: true } });
     const client = await prisma.client.findUniqueOrThrow({ where: { id: clientId } });
 

@@ -9,8 +9,8 @@ suppliersRouter.use(requireAuth);
 suppliersRouter.get('/', async (req, res, next) => {
   try {
     const { search } = req.query;
-    const where = { active: true };
-    if (search) where.name = { contains: search, mode: 'insensitive' };
+    const where = {};
+    if (search) where.name = { contains: search };
     const suppliers = await prisma.supplier.findMany({
       where,
       include: {
@@ -26,7 +26,7 @@ suppliersRouter.get('/', async (req, res, next) => {
 suppliersRouter.get('/:id', async (req, res, next) => {
   try {
     const supplier = await prisma.supplier.findUniqueOrThrow({
-      where: { id: parseInt(req.params.id) },
+      where: { id: req.params.id },
       include: {
         products: { where: { active: true }, orderBy: { name: 'asc' } },
         purchases: { orderBy: { createdAt: 'desc' }, take: 10 },
@@ -46,7 +46,7 @@ suppliersRouter.post('/', async (req, res, next) => {
 suppliersRouter.put('/:id', async (req, res, next) => {
   try {
     const supplier = await prisma.supplier.update({
-      where: { id: parseInt(req.params.id) },
+      where: { id: req.params.id },
       data: req.body,
     });
     res.json(supplier);
@@ -55,7 +55,7 @@ suppliersRouter.put('/:id', async (req, res, next) => {
 
 suppliersRouter.delete('/:id', async (req, res, next) => {
   try {
-    await prisma.supplier.update({ where: { id: parseInt(req.params.id) }, data: { active: false } });
+    await prisma.supplier.delete({ where: { id: req.params.id } });
     res.status(204).end();
   } catch (err) { next(err); }
 });

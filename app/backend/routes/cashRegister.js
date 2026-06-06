@@ -45,7 +45,7 @@ cashRegisterRouter.post('/open', async (req, res, next) => {
 cashRegisterRouter.post('/:id/close', async (req, res, next) => {
   try {
     const { actualAmount, notes } = req.body;
-    const register = await prisma.cashRegister.findUniqueOrThrow({ where: { id: parseInt(req.params.id) } });
+    const register = await prisma.cashRegister.findUniqueOrThrow({ where: { id: req.params.id } });
     if (register.status === 'CLOSED') return res.status(400).json({ error: 'Caja ya cerrada' });
 
     // Calcular esperado: apertura + ventas efectivo - egresos
@@ -57,7 +57,7 @@ cashRegisterRouter.post('/:id/close', async (req, res, next) => {
       }),
       prisma.cashFlow.aggregate({
         _sum: { amount: true },
-        where: { type: 'EXPENSE', date: { gte: register.openedAt } },
+        where: { type: 'EXPENSE', createdAt: { gte: register.openedAt } },
       }),
     ]);
 
@@ -68,7 +68,7 @@ cashRegisterRouter.post('/:id/close', async (req, res, next) => {
     const difference = actual - expectedAmount;
 
     const updated = await prisma.cashRegister.update({
-      where: { id: parseInt(req.params.id) },
+      where: { id: req.params.id },
       data: { status: 'CLOSED', closedAt: now, expectedAmount, actualAmount: actual, difference, notes },
     });
     res.json(updated);
