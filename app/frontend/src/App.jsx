@@ -12,11 +12,29 @@ import PricesPage from './components/screens/PricesPage.jsx';
 import CashFlowPage from './components/screens/CashFlowPage.jsx';
 import SuppliersPage from './components/screens/SuppliersPage.jsx';
 import SupplierDetailPage from './components/screens/SupplierDetailPage.jsx';
+import CatalogPage from './components/screens/CatalogPage.jsx';
 import AfipPage from './components/screens/AfipPage.jsx';
 import ReportsPage from './components/screens/ReportsPage.jsx';
 import CashRegisterPage from './components/screens/CashRegisterPage.jsx';
 import ClientsPage from './components/screens/ClientsPage.jsx';
 import ClientDetailPage from './components/screens/ClientDetailPage.jsx';
+import AdminPage from './components/screens/AdminPage.jsx';
+import AdminLoginPage from './components/screens/AdminLoginPage.jsx';
+import { useAdminAuthStore } from './store/adminAuthStore.js';
+
+const PLAN_LEVELS = { BASE: 0, INTERMEDIO: 1, PREMIUM: 2 };
+
+function PlanRoute({ minPlan = 0, children }) {
+  const user = useAuthStore((s) => s.user);
+  const plan = String(user?.kiosk?.customer?.plan || 'BASE').toUpperCase();
+  const level = PLAN_LEVELS[plan] ?? 0;
+  return level >= minPlan ? children : <Navigate to="/venta" replace />;
+}
+
+function AdminPrivateRoute({ children }) {
+  const token = useAdminAuthStore((s) => s.token);
+  return token ? children : <Navigate to="/admin/login" replace />;
+}
 
 function PrivateRoute({ children }) {
   const token = useAuthStore((s) => s.token);
@@ -25,15 +43,21 @@ function PrivateRoute({ children }) {
 
 export default function App() {
   const { token, fetchMe } = useAuthStore();
+  const { token: adminToken, fetchMe: fetchAdminMe } = useAdminAuthStore();
 
   useEffect(() => {
     if (token) fetchMe();
+  }, []);
+
+  useEffect(() => {
+    if (adminToken) fetchAdminMe();
   }, []);
 
   return (
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/admin/login" element={<AdminLoginPage />} />
         <Route
           path="/"
           element={
@@ -46,18 +70,27 @@ export default function App() {
           <Route path="venta"                element={<SalePage />} />
           <Route path="historial"            element={<HistoryPage />} />
           <Route path="stock"                element={<StockPage />} />
+          <Route path="catalogo"            element={<CatalogPage />} />
           <Route path="stock/nuevo"          element={<ProductFormPage />} />
           <Route path="stock/producto/:id"   element={<ProductFormPage />} />
           <Route path="precios"              element={<PricesPage />} />
-          <Route path="caja-flujo"           element={<CashFlowPage />} />
+          <Route path="caja-flujo"           element={<PlanRoute minPlan={1}><CashFlowPage /></PlanRoute>} />
           <Route path="proveedores"          element={<SuppliersPage />} />
           <Route path="proveedores/:id"      element={<SupplierDetailPage />} />
           <Route path="afip"                 element={<AfipPage />} />
-          <Route path="resultados"           element={<ReportsPage />} />
+          <Route path="resultados"           element={<PlanRoute minPlan={1}><ReportsPage /></PlanRoute>} />
           <Route path="caja"                 element={<CashRegisterPage />} />
-          <Route path="clientes"             element={<ClientsPage />} />
-          <Route path="clientes/:id"         element={<ClientDetailPage />} />
+          <Route path="clientes"             element={<PlanRoute minPlan={2}><ClientsPage /></PlanRoute>} />
+          <Route path="clientes/:id"         element={<PlanRoute minPlan={2}><ClientDetailPage /></PlanRoute>} />
         </Route>
+        <Route
+          path="/admin"
+          element={
+            <AdminPrivateRoute>
+              <AdminPage />
+            </AdminPrivateRoute>
+          }
+        />
       </Routes>
     </BrowserRouter>
   );

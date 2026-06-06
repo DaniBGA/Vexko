@@ -5,6 +5,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Search, X, Plus, Minus, CircleDollarSign, CreditCard, Repeat2, Landmark, PackagePlus, ScanSearch } from 'lucide-react';
 import { api } from '../../lib/api.js';
+import { unwrapProductsResponse } from '../../lib/response.js';
 import { PageHeader, fmt } from '../ui/index.jsx';
 
 const PAYMENT_METHODS = ['CASH', 'TRANSFER', 'CARD', 'MIXED'];
@@ -25,6 +26,12 @@ export default function SalePage() {
   const navigate = useNavigate();
   const location = useLocation();
   const queryClient = useQueryClient();
+  const todayLabel = new Date().toLocaleDateString('es-AR', {
+    weekday: 'long',
+    day: '2-digit',
+    month: 'long',
+    year: 'numeric',
+  });
 
   const [search, setSearch] = useState('');
   const [cart, setCart] = useState([]);
@@ -41,7 +48,7 @@ export default function SalePage() {
 
   const { data: products = [], isFetching } = useQuery({
     queryKey: ['products-search', searchTerm],
-    queryFn: () => api.get('/products', { params: { search: searchTerm } }).then((r) => r.data),
+    queryFn: () => api.get('/products', { params: { search: searchTerm } }).then((r) => unwrapProductsResponse(r.data)),
     enabled: searchTerm.length >= 1,
   });
 
@@ -71,6 +78,9 @@ export default function SalePage() {
       setTransferAmount('');
       setCardAmount('');
       queryClient.invalidateQueries({ queryKey: ['sales'] });
+      queryClient.invalidateQueries({ queryKey: ['cash-register-current'] });
+      queryClient.invalidateQueries({ queryKey: ['cash-register-history'] });
+      queryClient.invalidateQueries({ queryKey: ['reports'] });
       navigate('/historial');
     },
   });
@@ -138,7 +148,7 @@ export default function SalePage() {
 
   return (
     <div className="flex flex-col flex-1 overflow-hidden">
-      <PageHeader title="Registrar venta" />
+      <PageHeader title="Registrar venta" subtitle={todayLabel} />
       <div className="flex flex-1 gap-5 p-6 overflow-hidden">
         <div className="flex-1 flex flex-col gap-4 overflow-y-auto">
           <div className="card">

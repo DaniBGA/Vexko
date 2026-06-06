@@ -12,14 +12,16 @@ const CATEGORIES = [
 
 export default function CashFlowPage() {
   const queryClient = useQueryClient();
+  const [page, setPage] = useState(1);
+  const limit = 10;
   const [category, setCategory] = useState('ALQUILER');
   const [amount, setAmount] = useState('');
   const [description, setDescription] = useState('');
   const [date, setDate] = useState('');
 
   const { data, isLoading } = useQuery({
-    queryKey: ['cashflow', 'month'],
-    queryFn: () => api.get('/cashflow', { params: { period: 'month' } }).then((r) => r.data),
+    queryKey: ['cashflow', 'month', page],
+    queryFn: () => api.get('/cashflow', { params: { period: 'month', page, limit } }).then((r) => r.data),
   });
 
   const [editingId, setEditingId] = useState(null);
@@ -29,6 +31,8 @@ export default function CashFlowPage() {
     onSuccess: () => {
       toast.success('Gasto registrado');
       queryClient.invalidateQueries({ queryKey: ['cashflow'] });
+      queryClient.invalidateQueries({ queryKey: ['cash-register-current'] });
+      queryClient.invalidateQueries({ queryKey: ['cash-register-history'] });
       setAmount(''); setDescription(''); setDate(''); setCategory('ALQUILER');
     },
     onError: (err) => toast.error('Error guardando gasto'),
@@ -43,6 +47,8 @@ export default function CashFlowPage() {
         .then(() => {
           toast.success('Gasto actualizado');
           queryClient.invalidateQueries({ queryKey: ['cashflow'] });
+          queryClient.invalidateQueries({ queryKey: ['cash-register-current'] });
+          queryClient.invalidateQueries({ queryKey: ['cash-register-history'] });
           setEditingId(null);
           setAmount(''); setDescription(''); setDate(''); setCategory('Alquiler');
         }).catch(() => toast.error('Error actualizando gasto'));
@@ -76,6 +82,8 @@ export default function CashFlowPage() {
     api.delete(`/cashflow/${id}`).then(() => {
       toast.success('Gasto eliminado');
       queryClient.invalidateQueries({ queryKey: ['cashflow'] });
+      queryClient.invalidateQueries({ queryKey: ['cash-register-current'] });
+      queryClient.invalidateQueries({ queryKey: ['cash-register-history'] });
     }).catch(() => toast.error('Error borrando gasto'));
   }
 
@@ -117,46 +125,74 @@ export default function CashFlowPage() {
           <div className="card-header"><h3 className="card-title">Gastos del mes</h3></div>
           <div className="p-5">
             {isLoading ? <div>Cargando...</div> : (
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    <tr>
-                      <th className="th">Fecha</th>
-                      <th className="th">Categoría</th>
-                      <th className="th">Descripción</th>
-                      <th className="th text-right">Monto</th>
-                      <th className="th w-20"></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(data?.flows || []).map((f) => {
-                      let displayCategory = f.type;
-                      let displayConcept = f.description || '';
-                      if (f.description) {
-                        const parts = f.description.split(' — ');
-                        if (parts.length > 1) {
-                          displayCategory = parts[0];
-                          displayConcept = parts.slice(1).join(' — ');
-                        } else displayConcept = parts[0];
-                      }
-                      return (
-                        <tr key={f.id} className="hover:bg-gray-50">
-                          <td className="td">{new Date(f.createdAt).toLocaleDateString()}</td>
-                          <td className="td">{displayCategory}</td>
-                          <td className="td text-gray-600">{displayConcept || '—'}</td>
-                          <td className="td text-right font-700">{fmt(f.amount)}</td>
-                          <td className="td text-right">
-                            <div className="inline-flex gap-2">
-                              <button onClick={() => handleEdit(f)} className="text-blue-600 hover:underline text-sm">Editar</button>
-                              <button onClick={() => handleDelete(f.id)} className="text-red-600 hover:underline text-sm">Borrar</button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+              <>
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr>
+                        <th className="th">Fecha</th>
+                        <th className="th">Categoría</th>
+                        <th className="th">Descripción</th>
+                        <th className="th text-right">Monto</th>
+                        <th className="th w-20"></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(data?.flows || []).map((f) => {
+                        let displayCategory = f.type;
+                        let displayConcept = f.description || '';
+                        if (f.description) {
+                          const parts = f.description.split(' — ');
+                          if (parts.length > 1) {
+                            displayCategory = parts[0];
+                            displayConcept = parts.slice(1).join(' — ');
+                          } else displayConcept = parts[0];
+                        }
+                        return (
+                          <tr key={f.id} className="hover:bg-gray-50">
+                            <td className="td">{new Date(f.createdAt).toLocaleDateString()}</td>
+                            <td className="td">{displayCategory}</td>
+                            <td className="td text-gray-600">{displayConcept || '—'}</td>
+                            <td className="td text-right font-700">{fmt(f.amount)}</td>
+                            <td className="td text-right">
+                              <div className="inline-flex gap-2">
+                                <button onClick={() => handleEdit(f)} className="text-blue-600 hover:underline text-sm">Editar</button>
+                                <button onClick={() => handleDelete(f.id)} className="text-red-600 hover:underline text-sm">Borrar</button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="mt-4 flex items-center justify-between gap-3 flex-wrap">
+                  <div className="text-sm text-gray-500">
+                    {(data?.total || 0) === 0
+                      ? 'No hay gastos para mostrar'
+                      : `Mostrando página ${data?.page || page} de ${data?.totalPages || 1}`}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      className="btn-outline disabled:opacity-50"
+                      onClick={() => setPage((current) => Math.max(1, current - 1))}
+                      disabled={page <= 1}
+                    >
+                      Anterior
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-outline disabled:opacity-50"
+                      onClick={() => setPage((current) => Math.min(data?.totalPages || current, current + 1))}
+                      disabled={!data?.totalPages || page >= data.totalPages}
+                    >
+                      Siguiente
+                    </button>
+                  </div>
+                </div>
+              </>
             )}
           </div>
         </div>

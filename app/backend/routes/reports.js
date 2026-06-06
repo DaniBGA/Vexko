@@ -1,7 +1,7 @@
 // src/routes/reports.js
 import { Router } from 'express';
 import { prisma } from '../config/prisma.js';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, resolveRequestKiosk } from '../middleware/auth.js';
 
 export const reportsRouter = Router();
 reportsRouter.use(requireAuth);
@@ -9,24 +9,51 @@ reportsRouter.use(requireAuth);
 // GET /api/reports/monthly?month=5&year=2026
 reportsRouter.get('/monthly', async (req, res, next) => {
   try {
+    const kiosk = await resolveRequestKiosk(req);
+    if (!kiosk) {
+      const now = new Date();
+      const month = req.query.month ? parseInt(req.query.month) - 1 : now.getMonth();
+      const year = req.query.year ? parseInt(req.query.year) : now.getFullYear();
+      return res.json({
+        period: { month: month + 1, year },
+        revenue: 0,
+        cogs: 0,
+        grossProfit: 0,
+        grossMargin: 0,
+        expenses: 0,
+        netProfit: 0,
+        salesCount: 0,
+        avgTicket: 0,
+        cashSales: 0,
+        cardSales: 0,
+        transferSales: 0,
+        prevRevenue: 0,
+        revenueGrowth: 0,
+        topProducts: [],
+        expenseBreakdown: [],
+        threeMonthComparison: [],
+      });
+    }
     const now = new Date();
     const month = req.query.month ? parseInt(req.query.month) - 1 : now.getMonth();
     const year = req.query.year ? parseInt(req.query.year) : now.getFullYear();
     const from = new Date(year, month, 1);
     const to = new Date(year, month + 1, 0, 23, 59, 59);
 
+    const kioskWhere = kiosk ? { kioskId: kiosk.id } : {};
+
     const [salesAgg, saleItems, cashFlows, prevSalesAgg] = await Promise.all([
       prisma.sale.aggregate({
         _sum: { total: true, cashAmount: true, cardAmount: true, transferAmount: true },
         _count: { id: true },
-        where: { createdAt: { gte: from, lte: to } },
+        where: { createdAt: { gte: from, lte: to }, ...kioskWhere },
       }),
       prisma.saleItem.findMany({
-        where: { sale: { createdAt: { gte: from, lte: to } } },
+        where: { sale: { createdAt: { gte: from, lte: to }, ...kioskWhere } },
         include: { product: { select: { id: true, name: true, costPrice: true, subcategory: { select: { name: true } } } } },
       }),
       prisma.cashFlow.findMany({
-        where: { type: 'EXPENSE', createdAt: { gte: from, lte: to } },
+        where: { type: 'EXPENSE', createdAt: { gte: from, lte: to }, ...kioskWhere },
       }),
       // Mes anterior
       prisma.sale.aggregate({
@@ -37,6 +64,7 @@ reportsRouter.get('/monthly', async (req, res, next) => {
             gte: new Date(year, month - 1, 1),
             lte: new Date(year, month, 0, 23, 59, 59),
           },
+          ...kioskWhere,
         },
       }),
     ]);
@@ -94,9 +122,9 @@ reportsRouter.get('/monthly', async (req, res, next) => {
           const toM = new Date(y, mm + 1, 0, 23, 59, 59);
 
           const [agg, items, flows] = await Promise.all([
-            prisma.sale.aggregate({ _sum: { total: true }, _count: { id: true }, where: { createdAt: { gte: fromM, lte: toM } } }),
-            prisma.saleItem.findMany({ where: { sale: { createdAt: { gte: fromM, lte: toM } } }, include: { product: { select: { costPrice: true } } } }),
-            prisma.cashFlow.findMany({ where: { type: 'EXPENSE', createdAt: { gte: fromM, lte: toM } } }),
+            prisma.sale.aggregate({ _sum: { total: true }, _count: { id: true }, where: { createdAt: { gte: fromM, lte: toM }, ...kioskWhere } }),
+            prisma.saleItem.findMany({ where: { sale: { createdAt: { gte: fromM, lte: toM }, ...kioskWhere } }, include: { product: { select: { costPrice: true } } } }),
+            prisma.cashFlow.findMany({ where: { type: 'EXPENSE', createdAt: { gte: fromM, lte: toM }, ...kioskWhere } }),
           ]);
 
           const rev = parseFloat(agg._sum.total || 0);
@@ -116,25 +144,38 @@ reportsRouter.get('/monthly', async (req, res, next) => {
 // GET /api/reports/dashboard  — KPIs rápidos para home
 reportsRouter.get('/dashboard', async (req, res, next) => {
   try {
+    const kiosk = await resolveRequestKiosk(req);
+    if (!kiosk) {
+      return res.json({
+        today: { revenue: 0, salesCount: 0 },
+        month: { revenue: 0 },
+        lowStockCount: 0,
+        cashRegisterOpen: false,
+      });
+    }
     const now = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const kioskWhere = kiosk ? { kioskId: kiosk.id } : {};
 
-    const [todaySales, monthSales, lowStock, openRegister] = await Promise.all([
+    const [todaySales, monthSales, lowStockProducts, openRegister] = await Promise.all([
       prisma.sale.aggregate({
         _sum: { total: true },
         _count: { id: true },
-        where: { createdAt: { gte: todayStart } },
+        where: { createdAt: { gte: todayStart }, ...kioskWhere },
       }),
       prisma.sale.aggregate({
         _sum: { total: true },
-        where: { createdAt: { gte: monthStart } },
+        where: { createdAt: { gte: monthStart }, ...kioskWhere },
       }),
-      prisma.product.count({
-        where: { active: true, stock: { lte: prisma.product.fields.minStock } },
+      prisma.kioskProduct.findMany({
+        where: { kioskId: kiosk.id },
+        select: { stock: true, minStock: true },
       }),
-      prisma.cashRegister.findFirst({ where: { status: 'OPEN' } }),
+      prisma.cashRegister.findFirst({ where: { status: 'OPEN', user: kiosk?.id ? { kioskId: kiosk.id } : undefined } }),
     ]);
+
+    const lowStock = lowStockProducts.filter((product) => product.stock <= product.minStock).length;
 
     res.json({
       today: {

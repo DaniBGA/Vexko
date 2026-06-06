@@ -138,12 +138,12 @@ async function main() {
 
   // ─── Clientes de ejemplo ──────────────────────────────────────────────────
   await prisma.client.upsert({
-    where: { phone: '2494001001' }, update: {},
-    create: { name: 'Juan García', phone: '2494001001', points: 332, totalSpent: 46800 },
+    where: { kioskId_phone: { kioskId: kiosk.id, phone: '2494001001' } }, update: {},
+    create: { kioskId: kiosk.id, name: 'Juan García', phone: '2494001001', points: 332, totalSpent: 46800 },
   });
   await prisma.client.upsert({
-    where: { phone: '2494001002' }, update: {},
-    create: { name: 'María Rodríguez', phone: '2494001002', points: -20 + 50, totalSpent: 28500 },
+    where: { kioskId_phone: { kioskId: kiosk.id, phone: '2494001002' } }, update: {},
+    create: { kioskId: kiosk.id, name: 'María Rodríguez', phone: '2494001002', points: -20 + 50, totalSpent: 28500 },
   });
 
   console.log('\n✅ Seed completado!');

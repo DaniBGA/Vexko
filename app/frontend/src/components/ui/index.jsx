@@ -5,10 +5,13 @@ export function fmt(v) {
   return Number(v).toLocaleString('es-AR', { style: 'currency', currency: 'ARS' });
 }
 
-export function PageHeader({ title, children }) {
+export function PageHeader({ title, subtitle, children }) {
   return (
     <div className="p-6 border-b bg-white flex items-center justify-between">
-      <h1 className="text-xl font-700">{title}</h1>
+      <div className="flex items-center gap-3 flex-wrap">
+        <h1 className="text-xl font-700">{title}</h1>
+        {subtitle && <span className="text-sm text-gray-500">{subtitle}</span>}
+      </div>
       <div className="flex items-center gap-2">{children}</div>
     </div>
   );

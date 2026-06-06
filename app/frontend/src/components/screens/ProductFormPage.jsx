@@ -5,6 +5,7 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { PackagePlus, RotateCcw, Search } from 'lucide-react';
 import { api } from '../../lib/api.js';
+import { unwrapProductsResponse } from '../../lib/response.js';
 import { PageHeader, fmt } from '../ui/index.jsx';
 
 const EMPTY_FORM = {
@@ -78,6 +79,7 @@ export default function ProductFormPage() {
 
   const isNew = !id;
   const customMode = query.get('custom') === '1';
+  const catalogId = query.get('catalogId');
   const initialName = query.get('name') || '';
   const returnTo = query.get('return') || '/stock';
 
@@ -90,6 +92,12 @@ export default function ProductFormPage() {
     queryKey: ['product', id],
     queryFn: () => api.get(`/products/${id}`).then((r) => r.data),
     enabled: !!id,
+  });
+
+  const { data: catalogProduct } = useQuery({
+    queryKey: ['catalog-product', catalogId],
+    queryFn: () => api.get(`/products/${catalogId}`).then((r) => r.data),
+    enabled: isNew && !!catalogId,
   });
 
   const { data: categories = [] } = useQuery({
@@ -105,8 +113,8 @@ export default function ProductFormPage() {
   const catalogSearchTerm = catalogSearch.trim();
   const { data: catalogProducts = [], isFetching: isSearchingCatalog } = useQuery({
     queryKey: ['catalog-products', catalogSearchTerm],
-    queryFn: () => api.get('/products', { params: { search: catalogSearchTerm, isCustom: false } }).then((r) => r.data),
-    enabled: isNew && catalogSearchTerm.length >= 1,
+    queryFn: () => api.get('/products', { params: { search: catalogSearchTerm || undefined, isCustom: false, global: 1, limit: 8 } }).then((r) => unwrapProductsResponse(r.data)),
+    enabled: isNew,
   });
 
   // Detectar duplicados mientras se completa el formulario
@@ -114,13 +122,13 @@ export default function ProductFormPage() {
   const skuSearch = form.sku.trim();
   const { data: dupByName = [] } = useQuery({
     queryKey: ['product-dup-name', nameSearch],
-    queryFn: () => api.get('/products', { params: { search: nameSearch, isCustom: false, limit: 5 } }).then((r) => r.data.products),
+    queryFn: () => api.get('/products', { params: { search: nameSearch, isCustom: false, limit: 5 } }).then((r) => unwrapProductsResponse(r.data)),
     enabled: isNew && nameSearch.length >= 3,
     keepPreviousData: true,
   });
   const { data: dupBySku = [] } = useQuery({
     queryKey: ['product-dup-sku', skuSearch],
-    queryFn: () => api.get('/products', { params: { search: skuSearch, isCustom: false, limit: 5 } }).then((r) => r.data.products),
+    queryFn: () => api.get('/products', { params: { search: skuSearch, isCustom: false, limit: 5 } }).then((r) => unwrapProductsResponse(r.data)),
     enabled: isNew && skuSearch.length >= 1,
     keepPreviousData: true,
   });
@@ -148,6 +156,20 @@ export default function ProductFormPage() {
     }
   }, [selectedCatalogProduct]);
 
+  useEffect(() => {
+    if (catalogProduct) {
+      setSelectedCatalogProduct(catalogProduct);
+      setForm((current) => ({
+        ...current,
+        ...mapProductToForm(catalogProduct),
+        name: catalogProduct.name || current.name,
+        sku: catalogProduct.sku || catalogProduct.barcode || current.sku,
+        isCustom: true,
+      }));
+      setModalOpen(true);
+    }
+  }, [catalogProduct]);
+
   const allSubcategories = useMemo(
     () => categories.flatMap((category) => category.subcategories.map((subcategory) => ({ value: subcategory.id, label: `${category.name} › ${subcategory.name}` }))),
     [categories]
@@ -160,11 +182,13 @@ export default function ProductFormPage() {
     onSuccess: () => {
       toast.success(isNew ? 'Producto creado' : 'Producto actualizado');
       queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['catalog'] });
+      queryClient.invalidateQueries({ queryKey: ['catalog-products'] });
       if (customMode) {
         navigate(`${returnTo}?search=${encodeURIComponent(form.name)}`);
         return;
       }
-      navigate('/stock');
+      navigate(form.isCustom ? '/stock' : `/catalogo?search=${encodeURIComponent(form.name)}`);
     },
   });
 
@@ -173,6 +197,8 @@ export default function ProductFormPage() {
     onSuccess: () => {
       toast.success('Producto quitado de productos propios');
       queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['catalog'] });
+      queryClient.invalidateQueries({ queryKey: ['catalog-products'] });
       navigate('/stock');
     },
   });
@@ -531,10 +557,9 @@ export default function ProductFormPage() {
               />
             </div>
 
-            {catalogSearchTerm.length >= 1 && (
-              <div className="space-y-3">
-                {isSearchingCatalog && <div className="text-xs text-gray-400">Buscando en catálogo...</div>}
-                {(catalogProducts || []).slice(0, 8).map((productItem) => (
+            <div className="space-y-3">
+              {isSearchingCatalog && <div className="text-xs text-gray-400">Buscando en catálogo...</div>}
+              {(catalogProducts || []).slice(0, 8).map((productItem) => (
                   <div key={productItem.id} className="rounded-xl border border-gray-100 bg-gray-50 p-4 flex items-center justify-between gap-4">
                     <div className="min-w-0">
                       <div className="text-sm font-700 text-gray-800 truncate">{productItem.name}</div>
@@ -555,7 +580,7 @@ export default function ProductFormPage() {
                   </div>
                 ))}
 
-                {!isSearchingCatalog && catalogProducts.length === 0 && (
+              {!isSearchingCatalog && catalogProducts.length === 0 && (
                   <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-5 flex items-center justify-between gap-4">
                     <div>
                       <div className="text-sm font-700 text-brand-sidebar">No está en el catálogo global</div>
@@ -573,9 +598,8 @@ export default function ProductFormPage() {
                       Crear producto
                     </button>
                   </div>
-                )}
-              </div>
-            )}
+              )}
+            </div>
 
             {selectedCatalogProduct && (
               <div className="rounded-2xl border border-brand-navy/20 bg-brand-navy/5 p-4 flex items-center justify-between gap-4">

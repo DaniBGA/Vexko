@@ -1,7 +1,7 @@
 // src/routes/cashflow.js
 import { Router } from 'express';
 import { prisma } from '../config/prisma.js';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, resolveRequestKiosk } from '../middleware/auth.js';
 
 export const cashFlowRouter = Router();
 cashFlowRouter.use(requireAuth);
@@ -9,37 +9,62 @@ cashFlowRouter.use(requireAuth);
 cashFlowRouter.get('/', async (req, res, next) => {
   try {
     const { period = 'month' } = req.query;
+    const page = Math.max(1, parseInt(req.query.page || '1', 10) || 1);
+    const limit = Math.min(20, Math.max(1, parseInt(req.query.limit || '10', 10) || 10));
     const now = new Date();
     let from = new Date(now.getFullYear(), now.getMonth(), 1);
     if (period === 'today') from = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     if (period === 'week') from = new Date(now.getTime() - 7 * 86400000);
 
-    const kiosk = await prisma.kiosk.findFirst({ orderBy: { createdAt: 'asc' } });
-    if (!kiosk) return res.json({ flows: [], totals: { income: 0, expense: 0, balance: 0 } });
+    const kiosk = await resolveRequestKiosk(req);
+    if (!kiosk) {
+      return res.json({ flows: [], totals: { income: 0, expense: 0, balance: 0 }, page, limit, total: 0, totalPages: 0 });
+    }
 
-    const flows = await prisma.cashFlow.findMany({
-      where: { kioskId: kiosk.id, createdAt: { gte: from } },
-      include: { kiosk: { select: { name: true } } },
-      orderBy: { createdAt: 'desc' },
-    });
+    const where = { kioskId: kiosk.id, createdAt: { gte: from } };
+    const [flows, total, totalsByType] = await Promise.all([
+      prisma.cashFlow.findMany({
+        where,
+        include: { kiosk: { select: { name: true } } },
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      prisma.cashFlow.count({ where }),
+      prisma.cashFlow.groupBy({
+        by: ['type'],
+        where,
+        _sum: { amount: true },
+      }),
+    ]);
 
-    const totals = flows.reduce(
+    const totals = totalsByType.reduce(
       (acc, f) => {
-        if (f.type === 'INCOME') acc.income += parseFloat(f.amount);
-        else acc.expense += parseFloat(f.amount);
+        const amount = f._sum.amount ? parseFloat(f._sum.amount) : 0;
+        if (f.type === 'INCOME') acc.income += amount;
+        else acc.expense += amount;
         return acc;
       },
       { income: 0, expense: 0 }
     );
 
-    res.json({ flows, totals: { ...totals, balance: totals.income - totals.expense } });
+    const totalPages = total === 0 ? 0 : Math.ceil(total / limit);
+
+    res.json({
+      flows,
+      totals: { ...totals, balance: totals.income - totals.expense },
+      page,
+      limit,
+      total,
+      totalPages,
+    });
   } catch (err) { next(err); }
 });
 
 cashFlowRouter.post('/', async (req, res, next) => {
   try {
     const { type, amount, concept, category, date } = req.body;
-    const kiosk = await prisma.kiosk.findFirst({ orderBy: { createdAt: 'asc' } });
+    const kiosk = await resolveRequestKiosk(req);
     if (!kiosk) return res.status(400).json({ error: 'No hay kiosko configurado' });
 
     const descriptionParts = [];

@@ -10,10 +10,11 @@ import { authRouter } from './routes/auth.js';
 import { productsRouter } from './routes/products.js';
 import { salesRouter } from './routes/sales.js';
 import { cleanupOldSales } from './routes/sales.js';
-import { suppliersRouter } from './routes/suppliers.js';
+import { suppliersRouter, cleanupOldPurchases } from './routes/suppliers.js';
 import { cashFlowRouter } from './routes/cashflow.js';
 import { cashRegisterRouter } from './routes/cashRegister.js';
 import { clientsRouter } from './routes/clients.js';
+import { adminRouter } from './routes/admin.js';
 import { invoicesRouter } from './routes/invoices.js';
 import { reportsRouter } from './routes/reports.js';
 import { categoriesRouter } from './routes/categories.js';
@@ -50,6 +51,7 @@ app.use('/api/suppliers',      suppliersRouter);
 app.use('/api/cashflow',       cashFlowRouter);
 app.use('/api/cash-registers', cashRegisterRouter);
 app.use('/api/clients',        clientsRouter);
+app.use('/api/admin',          adminRouter);
 app.use('/api/invoices',       invoicesRouter);
 app.use('/api/reports',        reportsRouter);
 app.use('/api/categories',     categoriesRouter);
@@ -67,8 +69,15 @@ cleanupOldSales().catch((err) => {
   console.error('[cleanupOldSales] error:', err);
 });
 
+cleanupOldPurchases().catch((err) => {
+  console.error('[cleanupOldPurchases] error:', err);
+});
+
 setInterval(() => {
   cleanupOldSales().catch((err) => {
     console.error('[cleanupOldSales] error:', err);
+  });
+  cleanupOldPurchases().catch((err) => {
+    console.error('[cleanupOldPurchases] error:', err);
   });
 }, 24 * 60 * 60 * 1000);

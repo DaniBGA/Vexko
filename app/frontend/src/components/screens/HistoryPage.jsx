@@ -21,6 +21,7 @@ import {
   X,
 } from 'lucide-react';
 import { api } from '../../lib/api.js';
+import { unwrapProductsResponse } from '../../lib/response.js';
 import { PageHeader, Spinner, fmt } from '../ui/index.jsx';
 
 const PAGE_SIZE = 10;
@@ -118,7 +119,7 @@ export default function HistoryPage() {
   const editSearchTerm = editSearch.trim();
   const editProductsQuery = useQuery({
     queryKey: ['sale-edit-products', editSearchTerm],
-    queryFn: () => api.get('/products', { params: { search: editSearchTerm } }).then((r) => r.data),
+    queryFn: () => api.get('/products', { params: { search: editSearchTerm } }).then((r) => unwrapProductsResponse(r.data)),
     enabled: isEditing && editSearchTerm.length >= 1,
   });
 
@@ -127,6 +128,9 @@ export default function HistoryPage() {
     onSuccess: () => {
       toast.success('Venta actualizada');
       queryClient.invalidateQueries({ queryKey: ['sales'] });
+      queryClient.invalidateQueries({ queryKey: ['cash-register-current'] });
+      queryClient.invalidateQueries({ queryKey: ['cash-register-history'] });
+      queryClient.invalidateQueries({ queryKey: ['reports'] });
       queryClient.invalidateQueries({ queryKey: ['sale-detail', selectedSaleId] });
       closeModal();
     },
@@ -137,6 +141,9 @@ export default function HistoryPage() {
     onSuccess: () => {
       toast.success('Venta eliminada');
       queryClient.invalidateQueries({ queryKey: ['sales'] });
+      queryClient.invalidateQueries({ queryKey: ['cash-register-current'] });
+      queryClient.invalidateQueries({ queryKey: ['cash-register-history'] });
+      queryClient.invalidateQueries({ queryKey: ['reports'] });
       closeModal();
     },
   });

@@ -4,8 +4,6 @@
 .bg-brand-sidebar { @apply bg-slate-900; }
 .bg-brand-green { @apply bg-emerald-500; }
 
-.logo-circle { @apply inline-flex items-center justify-center w-16 h-16 rounded-3xl bg-emerald-500; }
-
 .page-card { @apply bg-white rounded-2xl p-7 shadow-lg; }
 
 .field-group { @apply flex flex-col; }

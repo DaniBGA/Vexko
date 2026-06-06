@@ -1,15 +1,27 @@
 // src/routes/clients.js
 import { Router } from 'express';
 import { prisma } from '../config/prisma.js';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, resolveRequestKiosk } from '../middleware/auth.js';
 
 export const clientsRouter = Router();
 clientsRouter.use(requireAuth);
 
+async function getScopedKiosk(req, res) {
+  const kiosk = await resolveRequestKiosk(req);
+  if (!kiosk) {
+    res.status(400).json({ error: 'No hay kiosko configurado' });
+    return null;
+  }
+  return kiosk;
+}
+
 clientsRouter.get('/', async (req, res, next) => {
   try {
+    const kiosk = await getScopedKiosk(req, res);
+    if (!kiosk) return;
+
     const { search } = req.query;
-    const where = {};
+    const where = { kioskId: kiosk.id };
     if (search) {
       where.OR = [
         { name: { contains: search } },
@@ -37,11 +49,33 @@ clientsRouter.get('/', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// Reglas de fidelización
+clientsRouter.get('/loyalty/rules', async (req, res, next) => {
+  try {
+    const rule = await prisma.loyaltyRule.findFirst({ where: { active: true } });
+    res.json(rule);
+  } catch (err) { next(err); }
+});
+
+clientsRouter.put('/loyalty/rules', async (req, res, next) => {
+  try {
+    const { amountPerPoint, pointsForDiscount, discountAmount } = req.body;
+    await prisma.loyaltyRule.updateMany({ where: { active: true }, data: { active: false } });
+    const rule = await prisma.loyaltyRule.create({
+      data: { amountPerPoint, pointsForDiscount: parseInt(pointsForDiscount), discountAmount },
+    });
+    res.json(rule);
+  } catch (err) { next(err); }
+});
+
 clientsRouter.get('/:id', async (req, res, next) => {
   try {
+    const kiosk = await getScopedKiosk(req, res);
+    if (!kiosk) return;
+
     const [client, rule] = await Promise.all([
-      prisma.client.findUniqueOrThrow({
-        where: { id: req.params.id },
+      prisma.client.findFirstOrThrow({
+        where: { id: req.params.id, kioskId: kiosk.id },
         include: {
           sales: {
             include: { items: { include: { product: { select: { name: true } } } } },
@@ -63,28 +97,39 @@ clientsRouter.get('/:id', async (req, res, next) => {
 
 clientsRouter.post('/', async (req, res, next) => {
   try {
+    const kiosk = await getScopedKiosk(req, res);
+    if (!kiosk) return;
+
     const { name, phone } = req.body;
-    const client = await prisma.client.create({ data: { name, phone } });
+    const client = await prisma.client.create({ data: { name, phone, kioskId: kiosk.id } });
     res.status(201).json(client);
   } catch (err) { next(err); }
 });
 
 clientsRouter.put('/:id', async (req, res, next) => {
   try {
-    const client = await prisma.client.update({
-      where: { id: req.params.id },
-      data: req.body,
+    const kiosk = await getScopedKiosk(req, res);
+    if (!kiosk) return;
+
+    const client = await prisma.client.findFirstOrThrow({ where: { id: req.params.id, kioskId: kiosk.id } });
+    const { kioskId, id, createdAt, updatedAt, ...data } = req.body;
+    const updated = await prisma.client.update({
+      where: { id: client.id },
+      data,
     });
-    res.json(client);
+    res.json(updated);
   } catch (err) { next(err); }
 });
 
 // Canjear puntos
 clientsRouter.post('/:id/redeem', async (req, res, next) => {
   try {
+    const kiosk = await getScopedKiosk(req, res);
+    if (!kiosk) return;
+
     const clientId = req.params.id;
     const rule = await prisma.loyaltyRule.findFirstOrThrow({ where: { active: true } });
-    const client = await prisma.client.findUniqueOrThrow({ where: { id: clientId } });
+    const client = await prisma.client.findFirstOrThrow({ where: { id: clientId, kioskId: kiosk.id } });
 
     if (client.points < rule.pointsForDiscount) {
       return res.status(400).json({ error: `Faltan ${rule.pointsForDiscount - client.points} puntos para canjear` });
@@ -101,25 +146,5 @@ clientsRouter.post('/:id/redeem', async (req, res, next) => {
     ]);
 
     res.json({ redemption, client: updated });
-  } catch (err) { next(err); }
-});
-
-// Reglas de fidelización
-clientsRouter.get('/loyalty/rules', async (req, res, next) => {
-  try {
-    const rule = await prisma.loyaltyRule.findFirst({ where: { active: true } });
-    res.json(rule);
-  } catch (err) { next(err); }
-});
-
-clientsRouter.put('/loyalty/rules', async (req, res, next) => {
-  try {
-    const { amountPerPoint, pointsForDiscount, discountAmount } = req.body;
-    // Desactivar la actual
-    await prisma.loyaltyRule.updateMany({ where: { active: true }, data: { active: false } });
-    const rule = await prisma.loyaltyRule.create({
-      data: { amountPerPoint, pointsForDiscount: parseInt(pointsForDiscount), discountAmount },
-    });
-    res.json(rule);
   } catch (err) { next(err); }
 });

@@ -1,7 +1,7 @@
 // src/routes/sales.js
 import { Router } from 'express';
 import { prisma } from '../config/prisma.js';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, resolveRequestKiosk } from '../middleware/auth.js';
 
 export const salesRouter = Router();
 salesRouter.use(requireAuth);
@@ -87,19 +87,26 @@ async function adjustClientTotals(tx, clientId, pointsDelta, totalSpentDelta) {
   });
 }
 
-async function restoreSaleStock(tx, saleItems) {
+async function restoreSaleStock(tx, saleItems, kioskId) {
   for (const item of saleItems) {
-    await tx.product.update({
-      where: { id: item.productId },
-      data: { stock: { increment: item.quantity } },
+    await tx.kioskProduct.upsert({
+      where: { kioskId_productId: { kioskId, productId: item.productId } },
+      create: {
+        kioskId,
+        productId: item.productId,
+        stock: item.quantity,
+        minStock: 0,
+        price: null,
+      },
+      update: { stock: { increment: item.quantity } },
     });
   }
 }
 
-async function applySaleStock(tx, items) {
+async function applySaleStock(tx, items, kioskId) {
   for (const item of items) {
-    await tx.product.update({
-      where: { id: item.productId },
+    await tx.kioskProduct.update({
+      where: { kioskId_productId: { kioskId, productId: item.productId } },
       data: { stock: { decrement: item.quantity } },
     });
   }
@@ -111,7 +118,8 @@ function validateSaleItems(items, products) {
     if (!product) {
       return `Producto ${item.productId} no encontrado`;
     }
-    if (product.stock < item.quantity) {
+    const stock = product.kioskProducts?.[0]?.stock ?? 0;
+    if (stock < item.quantity) {
       return `Stock insuficiente para ${product.name}`;
     }
   }
@@ -121,8 +129,45 @@ function validateSaleItems(items, products) {
 function calculateSaleTotal(items, products) {
   return items.reduce((sum, item) => {
     const product = products.find((p) => p.id === item.productId);
-    return sum + parseFloat(product.salePrice) * item.quantity;
+    const price = product.kioskProducts?.[0]?.price ?? product.salePrice;
+    return sum + parseFloat(price) * item.quantity;
   }, 0);
+}
+
+function buildPaymentAmounts(paymentMethod, total, cashAmount, transferAmount, cardAmount) {
+  const cashValue = parseAmount(cashAmount);
+  const transferValue = parseAmount(transferAmount);
+  const cardValue = parseAmount(cardAmount);
+
+  if (paymentMethod === 'CASH') {
+    return {
+      cashAmount: cashValue ?? total,
+      transferAmount: 0,
+      cardAmount: 0,
+    };
+  }
+
+  if (paymentMethod === 'TRANSFER') {
+    return {
+      cashAmount: 0,
+      transferAmount: transferValue ?? total,
+      cardAmount: 0,
+    };
+  }
+
+  if (paymentMethod === 'CARD') {
+    return {
+      cashAmount: 0,
+      transferAmount: 0,
+      cardAmount: cardValue ?? total,
+    };
+  }
+
+  return {
+    cashAmount: cashValue,
+    transferAmount: transferValue,
+    cardAmount: cardValue,
+  };
 }
 
 // GET /api/sales?page=1&limit=10
@@ -132,8 +177,13 @@ salesRouter.get('/', async (req, res, next) => {
     const safeLimit = normalizeLimit(limit);
     const requestedPage = normalizePage(page);
     const cutoff = getHistoryCutoff();
+    const kiosk = await resolveRequestKiosk(req);
 
-    const where = { createdAt: { gte: cutoff } };
+    if (!kiosk) {
+      return res.json({ sales: [], total: 0, page: 1, limit: safeLimit, totalPages: 0, maxHistoryMonths: MAX_HISTORY_MONTHS });
+    }
+
+    const where = { createdAt: { gte: cutoff }, kioskId: kiosk.id };
     const total = await prisma.sale.count({ where });
     const totalPages = Math.max(1, Math.ceil(total / safeLimit));
     const currentPage = Math.min(requestedPage, totalPages);
@@ -177,14 +227,40 @@ salesRouter.post('/', async (req, res, next) => {
       return res.status(400).json({ error: 'Medio de pago inválido' });
     }
 
+    const kiosk = await resolveRequestKiosk(req);
+    if (!kiosk) {
+      return res.status(400).json({ error: 'No hay kiosko configurado para registrar la venta' });
+    }
+
+    let nextClientId = clientId || null;
+    if (nextClientId) {
+      const client = await prisma.client.findFirst({ where: { id: nextClientId, kioskId: kiosk.id } });
+      if (!client) {
+        return res.status(400).json({ error: 'El cliente no pertenece a este kiosco' });
+      }
+      nextClientId = client.id;
+    }
+
     // Validar stock y obtener productos
     const productIds = items.map((i) => i.productId);
-    const products = await prisma.product.findMany({ where: { id: { in: productIds }, active: true } });
+    const products = await prisma.product.findMany({
+      where: {
+        id: { in: productIds },
+        active: true,
+        OR: [
+          { kioskProducts: { some: { kioskId: kiosk.id } } },
+          { customerId: kiosk.customerId, kioskProducts: { none: {} } },
+        ],
+      },
+      include: {
+        kioskProducts: { where: { kioskId: kiosk.id }, select: { stock: true, price: true } },
+      },
+    });
 
     for (const item of items) {
       const product = products.find((p) => p.id === item.productId);
       if (!product) return res.status(400).json({ error: `Producto ${item.productId} no encontrado` });
-      if (product.stock < item.quantity) {
+      if ((product.kioskProducts?.[0]?.stock ?? product.stock ?? 0) < item.quantity) {
         return res.status(400).json({ error: `Stock insuficiente para ${product.name}` });
       }
     }
@@ -198,16 +274,17 @@ salesRouter.post('/', async (req, res, next) => {
     // Puntos a sumar (regla activa)
     let pointsEarned = 0;
     let loyaltyRule = null;
-    if (clientId) {
+    if (nextClientId) {
       loyaltyRule = await prisma.loyaltyRule.findFirst({ where: { active: true } });
       if (loyaltyRule) {
         pointsEarned = Math.floor(total / parseFloat(loyaltyRule.amountPerPoint));
       }
     }
 
-    const cashValue = parseAmount(cashAmount);
-    const transferValue = parseAmount(transferAmount);
-    const cardValue = parseAmount(cardAmount);
+    const paymentAmounts = buildPaymentAmounts(normalizedPaymentMethod, total, cashAmount, transferAmount, cardAmount);
+    const cashValue = paymentAmounts.cashAmount;
+    const transferValue = paymentAmounts.transferAmount;
+    const cardValue = paymentAmounts.cardAmount;
     const receivedValue = parseAmount(cashReceived);
 
     if (normalizedPaymentMethod === 'MIXED') {
@@ -222,10 +299,6 @@ salesRouter.post('/', async (req, res, next) => {
     }
 
     const changeGiven = normalizedPaymentMethod === 'CASH' && receivedValue !== null ? receivedValue - total : null;
-    const kiosk = await prisma.kiosk.findFirst({ orderBy: { createdAt: 'asc' } });
-    if (!kiosk) {
-      return res.status(400).json({ error: 'No hay kiosko configurado para registrar la venta' });
-    }
 
     // Transacción atómica
     const sale = await prisma.$transaction(async (tx) => {
@@ -234,7 +307,7 @@ salesRouter.post('/', async (req, res, next) => {
         data: {
           kioskId: kiosk.id,
           userId: req.user.id,
-          clientId: clientId || null,
+          clientId: nextClientId,
           total,
           paymentMethod: normalizedPaymentMethod,
           cashAmount: cashValue,
@@ -246,7 +319,7 @@ salesRouter.post('/', async (req, res, next) => {
           items: {
             create: items.map((item) => {
               const product = products.find((p) => p.id === item.productId);
-              const unitPrice = parseFloat(product.salePrice);
+              const unitPrice = parseFloat(product.kioskProducts?.[0]?.price ?? product.salePrice);
               const subtotal = unitPrice * item.quantity;
               return {
                 productId: item.productId,
@@ -263,18 +336,32 @@ salesRouter.post('/', async (req, res, next) => {
         },
       });
 
-      // Descontar stock
+      // Descontar stock de la sucursal actual
       for (const item of items) {
-        await tx.product.update({
-          where: { id: item.productId },
-          data: { stock: { decrement: item.quantity } },
-        });
+        const product = products.find((p) => p.id === item.productId);
+        const inventory = product?.kioskProducts?.[0];
+        if (inventory) {
+          await tx.kioskProduct.update({
+            where: { kioskId_productId: { kioskId: kiosk.id, productId: item.productId } },
+            data: { stock: { decrement: item.quantity } },
+          });
+        } else {
+          await tx.kioskProduct.create({
+            data: {
+              kioskId: kiosk.id,
+              productId: item.productId,
+              stock: Math.max(0, (product?.stock ?? 0) - item.quantity),
+              minStock: product?.minStock ?? 0,
+              price: product?.salePrice ?? null,
+            },
+          });
+        }
       }
 
       // Actualizar puntos y gasto del cliente
-      if (clientId && pointsEarned > 0) {
+      if (nextClientId && pointsEarned > 0) {
         await tx.client.update({
-          where: { id: clientId },
+          where: { id: nextClientId },
           data: {
             points: { increment: pointsEarned },
             totalSpent: { increment: total },
@@ -294,7 +381,17 @@ salesRouter.post('/', async (req, res, next) => {
 // GET /api/sales/:id
 salesRouter.get('/:id', async (req, res, next) => {
   try {
-    const sale = await loadSaleDetail(prisma, req.params.id);
+    const kiosk = await resolveRequestKiosk(req);
+    if (!kiosk) return res.status(404).json({ error: 'Venta no encontrada' });
+
+    const sale = await prisma.sale.findFirstOrThrow({
+      where: { id: req.params.id, kioskId: kiosk.id },
+      include: {
+        items: { include: { product: { select: { id: true, name: true, salePrice: true, costPrice: true } } } },
+        client: { select: { id: true, name: true } },
+        user: { select: { id: true, name: true } },
+      },
+    });
     res.json(sale);
   } catch (err) {
     next(err);
@@ -315,25 +412,56 @@ salesRouter.put('/:id', async (req, res, next) => {
       return res.status(400).json({ error: 'Medio de pago inválido' });
     }
 
-    const nextClientId = clientId || null;
-    const cashValue = parseAmount(cashAmount);
-    const transferValue = parseAmount(transferAmount);
-    const cardValue = parseAmount(cardAmount);
+    let nextClientId = clientId || null;
     const receivedValue = parseAmount(cashReceived);
+    const kiosk = await resolveRequestKiosk(req);
+    if (!kiosk) {
+      return res.status(404).json({ error: 'Venta no encontrada' });
+    }
+
+    if (nextClientId) {
+      const client = await prisma.client.findFirst({ where: { id: nextClientId, kioskId: kiosk.id } });
+      if (!client) {
+        return res.status(400).json({ error: 'El cliente no pertenece a este kiosco' });
+      }
+      nextClientId = client.id;
+    }
 
     const updatedSale = await prisma.$transaction(async (tx) => {
-      const existingSale = await tx.sale.findUniqueOrThrow({
-        where: { id: saleId },
+      const existingSale = await tx.sale.findFirstOrThrow({
+        where: { id: saleId, kioskId: kiosk.id },
         include: { items: true },
       });
 
-      await restoreSaleStock(tx, existingSale.items);
+      await restoreSaleStock(tx, existingSale.items, kiosk.id);
       await adjustClientTotals(tx, existingSale.clientId, -(existingSale.pointsEarned || 0), -existingSale.total);
 
       const productIds = items.map((item) => item.productId);
       const products = await tx.product.findMany({
-        where: { id: { in: productIds }, active: true },
+        where: {
+          id: { in: productIds },
+          active: true,
+          OR: [
+            { kioskProducts: { some: { kioskId: kiosk.id } } },
+            { customerId: kiosk.customerId, kioskProducts: { none: {} } },
+          ],
+        },
+        include: { kioskProducts: { where: { kioskId: kiosk.id }, select: { stock: true, price: true } } },
       });
+
+      for (const product of products) {
+        if (!product.kioskProducts?.length) {
+          await tx.kioskProduct.create({
+            data: {
+              kioskId: kiosk.id,
+              productId: product.id,
+              stock: product.stock ?? 0,
+              minStock: product.minStock ?? 0,
+              price: product.kioskProducts?.[0]?.price ?? product.salePrice ?? null,
+            },
+          });
+        }
+      }
 
       const validationError = validateSaleItems(items, products);
       if (validationError) {
@@ -341,6 +469,10 @@ salesRouter.put('/:id', async (req, res, next) => {
       }
 
       const total = calculateSaleTotal(items, products);
+      const paymentAmounts = buildPaymentAmounts(normalizedPaymentMethod, total, cashAmount, transferAmount, cardAmount);
+      const cashValue = paymentAmounts.cashAmount;
+      const transferValue = paymentAmounts.transferAmount;
+      const cardValue = paymentAmounts.cardAmount;
 
       if (normalizedPaymentMethod === 'MIXED') {
         const partialTotal = [cashValue, transferValue, cardValue].reduce((sum, value) => sum + (Number.isFinite(value) ? value : 0), 0);
@@ -377,12 +509,12 @@ salesRouter.put('/:id', async (req, res, next) => {
           pointsEarned,
         },
       });
-
+                const loyaltyRule = await tx.loyaltyRule.findFirst({ where: { active: true } });
       await tx.saleItem.deleteMany({ where: { saleId } });
 
       for (const item of items) {
         const product = products.find((p) => p.id === item.productId);
-        const unitPrice = parseFloat(product.salePrice);
+        const unitPrice = parseFloat(product.kioskProducts?.[0]?.price ?? product.salePrice);
         const subtotal = unitPrice * item.quantity;
 
         await tx.saleItem.create({
@@ -396,12 +528,11 @@ salesRouter.put('/:id', async (req, res, next) => {
         });
       }
 
-      await applySaleStock(tx, items);
+      await applySaleStock(tx, items, kiosk.id);
       await adjustClientTotals(tx, nextClientId, pointsEarned, total);
 
       return loadSaleDetail(tx, saleId);
     });
-
     res.json(updatedSale);
   } catch (err) {
     next(err);
@@ -412,14 +543,18 @@ salesRouter.put('/:id', async (req, res, next) => {
 salesRouter.delete('/:id', async (req, res, next) => {
   try {
     const saleId = req.params.id;
+    const kiosk = await resolveRequestKiosk(req);
+    if (!kiosk) {
+      return res.status(404).json({ error: 'Venta no encontrada' });
+    }
 
     const deletedSale = await prisma.$transaction(async (tx) => {
-      const existingSale = await tx.sale.findUniqueOrThrow({
-        where: { id: saleId },
+      const existingSale = await tx.sale.findFirstOrThrow({
+        where: { id: saleId, kioskId: kiosk.id },
         include: { items: true },
       });
 
-      await restoreSaleStock(tx, existingSale.items);
+      await restoreSaleStock(tx, existingSale.items, kiosk.id);
       await adjustClientTotals(tx, existingSale.clientId, -(existingSale.pointsEarned || 0), -existingSale.total);
 
       await tx.sale.delete({ where: { id: saleId } });

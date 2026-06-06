@@ -8,8 +8,24 @@ import Logo from '../ui/Logo.jsx';
 export default function LoginPage() {
   const [email, setEmail] = useState('admin@kiosco.com');
   const [password, setPassword] = useState('kiosco123');
-  const { login, isLoading } = useAuthStore();
+  const login = useAuthStore((state) => state.login);
+  const isLoading = useAuthStore((state) => state.isLoading);
+  const loginError = useAuthStore((state) => state.loginError);
   const navigate = useNavigate();
+
+  function handleEmailChange(e) {
+    setEmail(e.target.value);
+    if (loginError) {
+      useAuthStore.setState({ loginError: '' });
+    }
+  }
+
+  function handlePasswordChange(e) {
+    setPassword(e.target.value);
+    if (loginError) {
+      useAuthStore.setState({ loginError: '' });
+    }
+  }
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -21,9 +37,7 @@ export default function LoginPage() {
     <div className="min-h-screen bg-brand-sidebar flex items-center justify-center p-6">
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
-          <div className="logo-circle mb-4">
-            <Logo className="h-10" />
-          </div>
+          <Logo className="h-10 mx-auto mb-4" />
           <p className="text-slate-400 text-sm mt-1">Sistema de gestión</p>
         </div>
 
@@ -34,7 +48,7 @@ export default function LoginPage() {
               <input
                 type="email"
                 value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                onChange={handleEmailChange}
                 className="field-input"
                 required
                 autoFocus
@@ -45,11 +59,17 @@ export default function LoginPage() {
               <input
                 type="password"
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                onChange={handlePasswordChange}
                 className="field-input"
                 required
               />
             </div>
+
+            {loginError ? (
+              <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                {loginError}
+              </div>
+            ) : null}
           </div>
 
           <button

@@ -1,10 +1,68 @@
 // src/routes/products.js
 import { Router } from 'express';
 import { prisma } from '../config/prisma.js';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, resolveRequestKiosk } from '../middleware/auth.js';
 
 export const productsRouter = Router();
 productsRouter.use(requireAuth);
+
+function buildProductInclude(kioskId) {
+  const include = {
+    subcategory: { include: { category: true } },
+    supplier: { select: { id: true, name: true } },
+  };
+
+  if (kioskId) {
+    include.kioskProducts = {
+      where: { kioskId },
+      select: { id: true, stock: true, minStock: true, price: true },
+    };
+  }
+
+  return include;
+}
+
+function getKioskInventory(product) {
+  return product?.kioskProducts?.[0] || null;
+}
+
+function mergeProductInventory(product) {
+  const inventory = getKioskInventory(product);
+  if (!inventory) {
+    return {
+      ...product,
+      stock: product.stock ?? 0,
+      minStock: product.minStock ?? 0,
+      kioskInventoryId: null,
+    };
+  }
+
+  return {
+    ...product,
+    stock: inventory.stock,
+    minStock: inventory.minStock,
+    salePrice: inventory.price ?? product.salePrice,
+    kioskInventoryId: inventory.id,
+  };
+}
+
+async function upsertKioskInventory(tx, kioskId, productId, data) {
+  return tx.kioskProduct.upsert({
+    where: { kioskId_productId: { kioskId, productId } },
+    create: {
+      kioskId,
+      productId,
+      stock: data.stock ?? 0,
+      minStock: data.minStock ?? 0,
+      price: data.price ?? null,
+    },
+    update: {
+      ...(data.stock !== undefined ? { stock: data.stock } : {}),
+      ...(data.minStock !== undefined ? { minStock: data.minStock } : {}),
+      ...(data.price !== undefined ? { price: data.price } : {}),
+    },
+  });
+}
 
 const productInclude = {
   subcategory: { include: { category: true } },
@@ -53,6 +111,29 @@ function buildSearchWhere(search) {
   };
 }
 
+function normalizeProductKey(product) {
+  return String(product?.name || '').trim().toLowerCase();
+}
+
+function dedupeProductsByName(products) {
+  const seen = new Map();
+  for (const product of products) {
+    const key = normalizeProductKey(product);
+    if (!key) continue;
+    if (!seen.has(key)) {
+      seen.set(key, product);
+    }
+  }
+  return Array.from(seen.values());
+}
+
+function buildCatalogAccessWhere(customerId) {
+  return {
+    active: true,
+    OR: [{ customerId }, { customerId: null }],
+  };
+}
+
 function computeProductValues(body) {
   const loadMode = body.loadMode === 'unit' ? 'unit' : 'pack';
   const packPrice = toNumber(body.packPrice);
@@ -78,18 +159,136 @@ function computeProductValues(body) {
 productsRouter.get('/', async (req, res, next) => {
   try {
     const { search, status, subcategoryId, supplierId, isCustom, page, limit } = req.query;
-    const where = { active: true };
-
-    const searchWhere = buildSearchWhere(search);
-    if (searchWhere) {
-      Object.assign(where, searchWhere);
+    const kiosk = await resolveRequestKiosk(req);
+    if (!kiosk) {
+      return res.json({ products: [], total: 0, page: 1, limit: normalizeLimit(limit), totalPages: 0 });
     }
+
+    const stockView = req.query.stockView === '1' || req.query.stockView === 'true';
+    const addedOnly = req.query.added === '1' || req.query.added === 'true' || req.query.agregados === '1' || req.query.agregados === 'true';
+    const includeGlobal = req.query.global === '1' || req.query.includeGlobal === 'true';
+    const dedupeGlobal = req.query.dedupe !== 'false';
+    const searchWhere = buildSearchWhere(search);
+    const usePagination = page !== undefined || limit !== undefined;
+
+    if (stockView) {
+      const where = buildCatalogAccessWhere(kiosk.customerId);
+      if (searchWhere) Object.assign(where, searchWhere);
+      if (subcategoryId) where.subcategoryId = subcategoryId;
+      if (supplierId) where.supplierId = supplierId;
+      if (isCustom === 'true') where.isCustom = true;
+      if (isCustom === 'false') where.isCustom = false;
+
+      const allProducts = await prisma.product.findMany({
+        where,
+        include: buildProductInclude(kiosk.id),
+        orderBy: [{ name: 'asc' }, { id: 'asc' }],
+      });
+
+      const merged = allProducts.map((product) => {
+        const inventory = getKioskInventory(product);
+        return {
+          ...product,
+          stock: inventory?.stock ?? 0,
+          minStock: inventory?.minStock ?? 0,
+          salePrice: inventory?.price ?? product.salePrice,
+          stockStatus:
+            (inventory?.stock ?? 0) === 0 ? 'OUT'
+            : (inventory?.stock ?? 0) <= (inventory?.minStock ?? 0) ? 'CRITICAL'
+            : (inventory?.stock ?? 0) <= (inventory?.minStock ?? 0) * 1.5 ? 'ALERT'
+            : 'OK',
+          kioskInventoryId: inventory?.id ?? null,
+        };
+      });
+
+      const filtered = addedOnly
+        ? merged.filter((product) => Boolean(product.customerId) || Boolean(product.kioskInventoryId))
+        : merged;
+
+      if (usePagination) {
+        const pageNumber = normalizePage(page);
+        const pageSize = normalizeLimit(limit);
+        const total = filtered.length;
+        const products = filtered.slice((pageNumber - 1) * pageSize, pageNumber * pageSize);
+        res.json({
+          products,
+          total,
+          page: pageNumber,
+          limit: pageSize,
+          totalPages: total === 0 ? 0 : Math.ceil(total / pageSize),
+        });
+        return;
+      }
+
+      res.json(filtered);
+      return;
+    }
+
+    if (includeGlobal) {
+      const where = buildCatalogAccessWhere(kiosk.customerId);
+      if (searchWhere) Object.assign(where, searchWhere);
+      if (subcategoryId) where.subcategoryId = subcategoryId;
+      if (supplierId) where.supplierId = supplierId;
+      if (isCustom === 'true') where.isCustom = true;
+      if (isCustom === 'false') where.isCustom = false;
+
+      const allProducts = await prisma.product.findMany({
+        where,
+        include: productInclude,
+        orderBy: [{ name: 'asc' }, { id: 'asc' }],
+      });
+      const listProducts = dedupeGlobal ? dedupeProductsByName(allProducts) : allProducts;
+
+      if (usePagination) {
+        const pageNumber = normalizePage(page);
+        const pageSize = normalizeLimit(limit);
+        const total = listProducts.length;
+        const products = listProducts.slice((pageNumber - 1) * pageSize, pageNumber * pageSize);
+
+        const enriched = products.map((p) => ({
+          ...p,
+          stockStatus:
+            p.stock === 0 ? 'OUT'
+            : p.stock <= p.minStock ? 'CRITICAL'
+            : p.stock <= p.minStock * 1.5 ? 'ALERT'
+            : 'OK',
+        }));
+
+        res.json({
+          products: enriched,
+          total,
+          page: pageNumber,
+          limit: pageSize,
+          totalPages: total === 0 ? 0 : Math.ceil(total / pageSize),
+        });
+        return;
+      }
+
+      const enriched = listProducts.map((p) => ({
+        ...p,
+        stockStatus:
+          p.stock === 0 ? 'OUT'
+          : p.stock <= p.minStock ? 'CRITICAL'
+          : p.stock <= p.minStock * 1.5 ? 'ALERT'
+          : 'OK',
+      }));
+
+      res.json(enriched);
+      return;
+    }
+
+    const where = {
+      active: true,
+      OR: [
+        { kioskProducts: { some: { kioskId: kiosk.id } } },
+        { customerId: kiosk.customerId, kioskProducts: { none: {} } },
+      ],
+    };
+    if (searchWhere) Object.assign(where, searchWhere);
     if (subcategoryId) where.subcategoryId = subcategoryId;
     if (supplierId) where.supplierId = supplierId;
     if (isCustom === 'true') where.isCustom = true;
     if (isCustom === 'false') where.isCustom = false;
-
-    const usePagination = page !== undefined || limit !== undefined;
 
     if (usePagination) {
       const pageNumber = normalizePage(page);
@@ -98,21 +297,24 @@ productsRouter.get('/', async (req, res, next) => {
         prisma.product.count({ where }),
         prisma.product.findMany({
           where,
-          include: productInclude,
+          include: buildProductInclude(kiosk.id),
           orderBy: { name: 'asc' },
           skip: (pageNumber - 1) * pageSize,
           take: pageSize,
         }),
       ]);
 
-      const enriched = products.map((p) => ({
-        ...p,
-        stockStatus:
-          p.stock === 0 ? 'OUT'
-          : p.stock <= p.minStock ? 'CRITICAL'
-          : p.stock <= p.minStock * 1.5 ? 'ALERT'
-          : 'OK',
-      }));
+      const enriched = products.map((p) => {
+        const inventory = getKioskInventory(p);
+        return {
+          ...mergeProductInventory(p),
+          stockStatus:
+            inventory?.stock === 0 ? 'OUT'
+            : inventory?.stock <= inventory?.minStock ? 'CRITICAL'
+            : inventory?.stock <= inventory?.minStock * 1.5 ? 'ALERT'
+            : 'OK',
+        };
+      });
 
       res.json({
         products: enriched,
@@ -126,19 +328,21 @@ productsRouter.get('/', async (req, res, next) => {
 
     const products = await prisma.product.findMany({
       where,
-      include: productInclude,
+      include: buildProductInclude(kiosk.id),
       orderBy: { name: 'asc' },
     });
 
-    // Enriquecer con estado de stock
-    const enriched = products.map((p) => ({
-      ...p,
-      stockStatus:
-        p.stock === 0 ? 'OUT'
-        : p.stock <= p.minStock ? 'CRITICAL'
-        : p.stock <= p.minStock * 1.5 ? 'ALERT'
-        : 'OK',
-    }));
+    const enriched = products.map((p) => {
+      const inventory = getKioskInventory(p);
+      return {
+        ...mergeProductInventory(p),
+        stockStatus:
+          inventory?.stock === 0 ? 'OUT'
+          : inventory?.stock <= inventory?.minStock ? 'CRITICAL'
+          : inventory?.stock <= inventory?.minStock * 1.5 ? 'ALERT'
+          : 'OK',
+      };
+    });
 
     res.json(enriched);
   } catch (err) {
@@ -149,8 +353,20 @@ productsRouter.get('/', async (req, res, next) => {
 // GET /api/products/prices  — lista de precios simplificada
 productsRouter.get('/prices', async (req, res, next) => {
   try {
+    const kiosk = await resolveRequestKiosk(req);
+    if (!kiosk) return res.json([]);
+    const includeGlobal = req.query.global === '1' || req.query.includeGlobal === 'true';
+    const where = includeGlobal ? buildCatalogAccessWhere(kiosk.customerId) : { active: true, kioskProducts: { some: { kioskId: kiosk.id } } };
+    if (!includeGlobal) {
+      where.OR = [
+        { kioskProducts: { some: { kioskId: kiosk.id } } },
+        { customerId: kiosk.customerId, kioskProducts: { none: {} } },
+      ];
+      delete where.kioskProducts;
+    }
+
     const products = await prisma.product.findMany({
-      where: { active: true },
+      where,
       select: {
         id: true,
         name: true,
@@ -161,13 +377,17 @@ productsRouter.get('/prices', async (req, res, next) => {
         costPrice: true,
         salePrice: true,
         subcategory: { select: { name: true, category: { select: { name: true } } } },
+        kioskProducts: {
+          where: { kioskId: kiosk.id },
+          select: { id: true, stock: true, minStock: true, price: true },
+        },
       },
       orderBy: [
         { subcategory: { category: { name: 'asc' } } },
         { name: 'asc' },
       ],
     });
-    res.json(products);
+    res.json(products.map((product) => mergeProductInventory(product)));
   } catch (err) {
     next(err);
   }
@@ -176,11 +396,111 @@ productsRouter.get('/prices', async (req, res, next) => {
 // GET /api/products/:id
 productsRouter.get('/:id', async (req, res, next) => {
   try {
-    const product = await prisma.product.findUniqueOrThrow({
-      where: { id: req.params.id },
+    const kiosk = await resolveRequestKiosk(req);
+    if (!kiosk) return res.status(404).json({ error: 'Producto no encontrado' });
+
+    const product = await prisma.product.findFirstOrThrow({
+      where: {
+        id: req.params.id,
+        active: true,
+        OR: [
+          { customerId: null },
+          { kioskProducts: { some: { kioskId: kiosk.id } } },
+        ],
+      },
+      include: buildProductInclude(kiosk.id),
+    });
+      res.json(mergeProductInventory(product));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/products/:id/clone-to-kiosk
+productsRouter.post('/:id/clone-to-kiosk', async (req, res, next) => {
+  try {
+    const kiosk = await resolveRequestKiosk(req);
+    if (!kiosk) {
+      return res.status(404).json({ error: 'Kiosco no encontrado' });
+    }
+
+    const source = await prisma.product.findFirst({
+      where: {
+        id: req.params.id,
+        active: true,
+        OR: [
+          { customerId: null },
+          { kioskProducts: { some: { kioskId: kiosk.id } } },
+        ],
+      },
       include: productInclude,
     });
-    res.json(product);
+
+    if (!source) {
+      return res.status(404).json({ error: 'Producto no encontrado' });
+    }
+
+    const existing = await prisma.product.findFirst({
+      where: {
+        isCustom: true,
+        name: source.name,
+        subcategoryId: source.subcategoryId,
+        supplierId: source.supplierId,
+        costPrice: source.costPrice,
+        salePrice: source.salePrice,
+        loadMode: source.loadMode,
+        kioskProducts: { some: { kioskId: kiosk.id } },
+      },
+      include: buildProductInclude(kiosk.id),
+    });
+
+    if (existing) {
+      return res.json(mergeProductInventory(existing));
+    }
+
+    const product = await prisma.product.create({
+      data: {
+        name: source.name,
+        description: source.description,
+        barcode: null,
+        sku: null,
+        loadMode: source.loadMode,
+        basePrice: source.basePrice,
+        baseCost: source.baseCost,
+        packPrice: source.packPrice,
+        packUnits: source.packUnits,
+        packCount: source.packCount,
+        categoryId: source.categoryId,
+        subcategoryId: source.subcategoryId,
+        isCustom: true,
+        customerId: kiosk.customerId,
+        stock: 0,
+        minStock: source.minStock ?? 0,
+        salePrice: source.salePrice,
+        costPrice: source.costPrice,
+        expiresAt: source.expiresAt,
+        supplierId: source.supplierId,
+        active: true,
+      },
+      include: buildProductInclude(kiosk.id),
+    });
+
+    await prisma.kioskProduct.create({
+      data: {
+        kioskId: kiosk.id,
+        productId: product.id,
+        stock: 0,
+        minStock: source.minStock ?? 0,
+        price: source.salePrice ?? null,
+      },
+    });
+
+    const createdProduct = await prisma.product.findUnique({
+      where: { id: product.id },
+      include: buildProductInclude(kiosk.id),
+    });
+
+    res.status(201).json(mergeProductInventory(createdProduct));
   } catch (err) {
     next(err);
   }
@@ -190,12 +510,18 @@ productsRouter.get('/:id', async (req, res, next) => {
 productsRouter.post('/', async (req, res, next) => {
   try {
     const { name, barcode, sku, subcategoryId, supplierId, minStock, expiresAt, description, isCustom, customerId } = req.body;
+    const kiosk = await resolveRequestKiosk(req);
+    const wantsCustom = isCustom === true || isCustom === 'true';
+    const resolvedCustomerId = customerId !== undefined
+      ? customerId || null
+      : (wantsCustom ? kiosk?.customerId || null : null);
     const values = computeProductValues(req.body);
     const product = await prisma.product.create({
       data: {
         name,
         barcode: barcode || null,
         sku: sku || null,
+        loadMode: values.loadMode,
         subcategoryId: subcategoryId || null,
         supplierId: supplierId || null,
         basePrice: values.packPrice ?? null,
@@ -209,11 +535,28 @@ productsRouter.post('/', async (req, res, next) => {
         minStock: toInt(minStock) || 0,
         expiresAt: expiresAt ? new Date(expiresAt) : null,
         description,
-        isCustom: Boolean(isCustom),
-        customerId: customerId || null,
+        isCustom: wantsCustom,
+        customerId: resolvedCustomerId,
       },
-      include: productInclude,
+      include: buildProductInclude(kiosk?.id),
     });
+
+    if (kiosk && wantsCustom) {
+      await upsertKioskInventory(prisma, kiosk.id, product.id, {
+        stock: values.stock ?? 0,
+        minStock: toInt(minStock) || 0,
+        price: values.salePrice ?? null,
+      });
+
+      const createdProduct = await prisma.product.findUnique({
+        where: { id: product.id },
+        include: buildProductInclude(kiosk.id),
+      });
+
+      res.status(201).json(mergeProductInventory(createdProduct));
+      return;
+    }
+
     res.status(201).json(product);
   } catch (err) {
     next(err);
@@ -224,6 +567,23 @@ productsRouter.post('/', async (req, res, next) => {
 productsRouter.put('/:id', async (req, res, next) => {
   try {
     const { name, barcode, sku, subcategoryId, supplierId, minStock, expiresAt, description, isCustom, customerId } = req.body;
+    const kiosk = await resolveRequestKiosk(req);
+    if (!kiosk) return res.status(404).json({ error: 'Producto no encontrado' });
+    const existing = await prisma.product.findFirst({
+      where: {
+        id: req.params.id,
+        OR: [
+          { customerId: kiosk.customerId },
+          { kioskProducts: { some: { kioskId: kiosk.id } } },
+        ],
+      },
+      select: { id: true },
+    });
+    if (!existing) return res.status(404).json({ error: 'Producto no encontrado' });
+    const wantsCustom = isCustom === true || isCustom === 'true';
+    const resolvedCustomerId = customerId !== undefined
+      ? customerId || null
+      : (wantsCustom ? kiosk.customerId : null);
     const values = computeProductValues(req.body);
     const product = await prisma.product.update({
       where: { id: req.params.id },
@@ -231,6 +591,7 @@ productsRouter.put('/:id', async (req, res, next) => {
         name,
         barcode: barcode || null,
         sku: sku !== undefined ? sku || null : undefined,
+        loadMode: values.loadMode,
         subcategoryId: subcategoryId !== undefined ? subcategoryId || null : undefined,
         supplierId: supplierId !== undefined ? supplierId || null : undefined,
         basePrice: values.packPrice ?? null,
@@ -244,12 +605,28 @@ productsRouter.put('/:id', async (req, res, next) => {
         minStock: minStock !== undefined ? toInt(minStock) : undefined,
         expiresAt: expiresAt ? new Date(expiresAt) : null,
         description,
-        isCustom: typeof isCustom === 'boolean' ? isCustom : undefined,
-        customerId: customerId !== undefined ? customerId || null : undefined,
+        isCustom: typeof isCustom === 'boolean' || typeof isCustom === 'string' ? wantsCustom : undefined,
+        customerId: resolvedCustomerId,
       },
-      include: productInclude,
+      include: buildProductInclude(kiosk.id),
     });
-    res.json(product);
+
+    if (wantsCustom) {
+      await upsertKioskInventory(prisma, kiosk.id, product.id, {
+        stock: values.stock,
+        minStock: minStock !== undefined ? toInt(minStock) : undefined,
+        price: values.salePrice,
+      });
+    } else {
+      await prisma.kioskProduct.deleteMany({ where: { kioskId: kiosk.id, productId: product.id } });
+    }
+
+    const updatedProduct = await prisma.product.findUnique({
+      where: { id: product.id },
+      include: buildProductInclude(kiosk.id),
+    });
+
+    res.json(mergeProductInventory(updatedProduct));
   } catch (err) {
     next(err);
   }
@@ -258,20 +635,40 @@ productsRouter.put('/:id', async (req, res, next) => {
 // DELETE /api/products/:id
 productsRouter.delete('/:id', async (req, res, next) => {
   try {
-    const product = await prisma.product.findUnique({
-      where: { id: req.params.id },
-      select: { isCustom: true },
+    const kiosk = await resolveRequestKiosk(req);
+    if (!kiosk) {
+      return res.status(404).json({ error: 'Producto no encontrado' });
+    }
+
+    const product = await prisma.product.findFirst({
+      where: {
+        id: req.params.id,
+        OR: [{ customerId: null }, { kioskProducts: { some: { kioskId: kiosk.id } } }],
+      },
+      select: {
+        isCustom: true,
+        customerId: true,
+        kioskProducts: { where: { kioskId: kiosk.id }, select: { id: true } },
+      },
     });
 
     if (!product) {
       return res.status(404).json({ error: 'Producto no encontrado' });
     }
 
-    if (product.isCustom) {
+    if (product.kioskProducts?.length) {
+      await prisma.kioskProduct.deleteMany({ where: { kioskId: kiosk.id, productId: req.params.id } });
+    }
+
+    if (product.isCustom && product.customerId === kiosk.customerId) {
       await prisma.product.update({
         where: { id: req.params.id },
-        data: { isCustom: false, customerId: null },
+        data: { active: false },
       });
+      return res.status(204).end();
+    }
+
+    if (product.kioskProducts?.length) {
       return res.status(204).end();
     }
 
@@ -288,9 +685,19 @@ productsRouter.delete('/:id', async (req, res, next) => {
 // GET /api/products/barcode/:code
 productsRouter.get('/barcode/:code', async (req, res, next) => {
   try {
+    const kiosk = await resolveRequestKiosk(req);
+    if (!kiosk) return res.status(404).json({ error: 'Producto no encontrado' });
+
     const product = await prisma.product.findFirst({
-      where: { barcode: req.params.code, active: true },
-      include: productInclude,
+      where: {
+        barcode: req.params.code,
+        active: true,
+        OR: [
+          { customerId: null },
+          { kioskProducts: { some: { kioskId: kiosk.id } } },
+        ],
+      },
+      include: buildProductInclude(kiosk.id),
     });
     if (!product) return res.status(404).json({ error: 'Producto no encontrado' });
     res.json(product);
