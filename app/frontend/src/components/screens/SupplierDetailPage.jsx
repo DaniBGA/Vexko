@@ -252,6 +252,10 @@ export default function SupplierDetailPage() {
           productId: item.product.id,
           quantity: totalUnits,
           unitCost,
+          // include pack info to help backend/recording
+          packUnits: getItemPackUnits(item),
+          packPrice: getItemEffectivePackPrice(item),
+          mode: item.product.loadMode || 'unit',
         };
       }),
     });
