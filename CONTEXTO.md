@@ -47,6 +47,13 @@ Regla importante:
 - Pantallas y modales: `app/frontend/src/components/screens`.
 - UI compartida: `app/frontend/src/components/ui`.
 
+## Documentos de Deploy y Producción
+
+- **DEPLOY.md**: Guía paso a paso para deploy en Hostinger KVN2 (setup servidor, Nginx, SSL, PM2, etc)
+- **PRODUCTION.md**: Mejores prácticas de seguridad, performance, monitoreo, backups y troubleshooting
+- **pre-deploy-check.sh**: Script para verificar que no hay archivos sensibles antes de hacer push
+- **.gitignore**: Configurado para excluir `.env`, `node_modules`, bases de datos, etc
+
 ## Mapa rápido de módulos
 
 ### Backend

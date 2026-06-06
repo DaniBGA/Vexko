@@ -1,0 +1,123 @@
+# Environment variables
+.env
+.env.local
+.env.*.local
+.env.production
+
+# Node modules
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build outputs
+dist/
+build/
+.next/
+.nuxt/
+out/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+
+# Prisma
+prisma/dev.db
+prisma/dev.db-journal
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Logs
+logs/
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+
+# Frontend build
+app/frontend/dist/
+app/frontend/.vite/
+
+# Backend
+app/backend/dist/
+app/backend/.env*
+
+# Testing
+.coverage/
+.nyc_output/
+
+# Production database
+prisma/prod.db
+prisma/prod.db-journal# Environment variables
+.env
+.env.local
+.env.*.local
+.env.production
+
+# Node modules
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build outputs
+dist/
+build/
+.next/
+.nuxt/
+out/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+
+# Prisma
+prisma/dev.db
+prisma/dev.db-journal
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Logs
+logs/
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+
+# Frontend build
+app/frontend/dist/
+app/frontend/.vite/
+
+# Backend
+app/backend/dist/
+app/backend/.env*
+
+# Testing
+.coverage/
+.nyc_output/
+
+# Production database
+prisma/prod.db
+prisma/prod.db-journal
