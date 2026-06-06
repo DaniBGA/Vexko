@@ -1,0 +1,20 @@
+/* Styles specific for authentication / login screens */
+
+/* Brand colors mapped to Tailwind utilities via @apply so they work with the design system */
+.bg-brand-sidebar { @apply bg-slate-900; }
+.bg-brand-green { @apply bg-emerald-500; }
+
+.logo-circle { @apply inline-flex items-center justify-center w-16 h-16 rounded-3xl bg-emerald-500; }
+
+.page-card { @apply bg-white rounded-2xl p-7 shadow-lg; }
+
+.field-group { @apply flex flex-col; }
+.field-label { @apply text-sm text-slate-600 mb-2 font-medium; }
+.field-input { @apply w-full px-4 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-300; }
+
+.btn-primary { @apply bg-emerald-600 text-white font-semibold rounded-lg transition hover:bg-emerald-700 disabled:opacity-60 focus:outline-none focus:ring-2 focus:ring-emerald-300; }
+
+/* Small responsive tweaks */
+@media (min-width: 640px) {
+  .page-card { @apply p-8; }
+}

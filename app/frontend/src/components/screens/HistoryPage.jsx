@@ -5,6 +5,7 @@ import { api } from '../../lib/api.js';
 import { PageHeader, Spinner, fmt } from '../ui/index.jsx';
 import { format } from 'date-fns';
 import { es } from 'date-fns/locale';
+import { CircleDollarSign, Landmark, CreditCard, Repeat2 } from 'lucide-react';
 
 const PERIODS = [
   { value: 'today', label: 'Hoy' },
@@ -20,6 +21,13 @@ export default function HistoryPage() {
   });
   const sales = data?.sales || [];
   const totalRevenue = sales.reduce((s, sale) => s + parseFloat(sale.total), 0);
+
+  const paymentMeta = {
+    CASH: { label: 'Efectivo', Icon: CircleDollarSign },
+    TRANSFER: { label: 'Transferencia', Icon: Landmark },
+    CARD: { label: 'Tarjeta', Icon: CreditCard },
+    MIXED: { label: 'Mixto', Icon: Repeat2 },
+  };
 
   return (
     <div className="flex flex-col flex-1 overflow-hidden">
@@ -58,7 +66,16 @@ export default function HistoryPage() {
                       {s.items.map((i) => i.product.name).join(' + ')}
                     </td>
                     <td className="td text-xs text-gray-400">
-                      {s.paymentMethod === 'CASH' ? '💵' : s.paymentMethod === 'CARD' ? '💳' : '⚡'}
+                      {(() => {
+                        const meta = paymentMeta[s.paymentMethod] || paymentMeta.MIXED;
+                        const Icon = meta.Icon;
+                        return (
+                          <span className="inline-flex items-center gap-1 text-xs text-gray-500">
+                            <Icon size={14} />
+                            {meta.label}
+                          </span>
+                        );
+                      })()}
                     </td>
                     <td className="td text-sm text-gray-400">{s.client?.name || '—'}</td>
                     <td className="td font-700">{fmt(s.total)}</td>

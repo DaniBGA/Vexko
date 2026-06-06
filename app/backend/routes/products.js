@@ -14,17 +14,19 @@ const productInclude = {
 // GET /api/products
 productsRouter.get('/', async (req, res, next) => {
   try {
-    const { search, status, subcategoryId, supplierId } = req.query;
+    const { search, status, subcategoryId, supplierId, isCustom } = req.query;
     const where = { active: true };
 
     if (search) {
       where.OR = [
-        { name: { contains: search, mode: 'insensitive' } },
-        { barcode: { contains: search } },
+        { name: { contains: search } },
+        { id: { contains: search } },
       ];
     }
     if (subcategoryId) where.subcategoryId = parseInt(subcategoryId);
     if (supplierId) where.supplierId = parseInt(supplierId);
+    if (isCustom === 'true') where.isCustom = true;
+    if (isCustom === 'false') where.isCustom = false;
     if (status === 'critical') {
       where.stock = { lte: prisma.product.fields.minStock };
     }
@@ -91,12 +93,12 @@ productsRouter.get('/:id', async (req, res, next) => {
 // POST /api/products
 productsRouter.post('/', async (req, res, next) => {
   try {
-    const { name, barcode, subcategoryId, supplierId, costPrice, salePrice, stock, minStock, expiresAt, description } = req.body;
+    const { name, barcode, subcategoryId, supplierId, costPrice, salePrice, stock, minStock, expiresAt, description, isCustom, customerId } = req.body;
     const product = await prisma.product.create({
       data: {
         name,
         barcode: barcode || null,
-        subcategoryId: parseInt(subcategoryId),
+        subcategoryId: subcategoryId ? parseInt(subcategoryId) : null,
         supplierId: supplierId ? parseInt(supplierId) : null,
         costPrice,
         salePrice,
@@ -104,6 +106,8 @@ productsRouter.post('/', async (req, res, next) => {
         minStock: parseInt(minStock) || 0,
         expiresAt: expiresAt ? new Date(expiresAt) : null,
         description,
+        isCustom: Boolean(isCustom),
+        customerId: customerId || null,
       },
       include: productInclude,
     });
@@ -116,7 +120,7 @@ productsRouter.post('/', async (req, res, next) => {
 // PUT /api/products/:id
 productsRouter.put('/:id', async (req, res, next) => {
   try {
-    const { name, barcode, subcategoryId, supplierId, costPrice, salePrice, stock, minStock, expiresAt, description } = req.body;
+    const { name, barcode, subcategoryId, supplierId, costPrice, salePrice, stock, minStock, expiresAt, description, isCustom, customerId } = req.body;
     const product = await prisma.product.update({
       where: { id: parseInt(req.params.id) },
       data: {
@@ -130,6 +134,8 @@ productsRouter.put('/:id', async (req, res, next) => {
         minStock: minStock !== undefined ? parseInt(minStock) : undefined,
         expiresAt: expiresAt ? new Date(expiresAt) : null,
         description,
+        isCustom: typeof isCustom === 'boolean' ? isCustom : undefined,
+        customerId: customerId !== undefined ? customerId || null : undefined,
       },
       include: productInclude,
     });

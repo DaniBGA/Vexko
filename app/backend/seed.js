@@ -16,6 +16,34 @@ async function main() {
   });
   console.log('✓ Usuario:', owner.email);
 
+  const customer = await prisma.customer.upsert({
+    where: { name: 'Kiosco Demo' },
+    update: {},
+    create: {
+      name: 'Kiosco Demo',
+      email: 'demo@kiosco.com',
+      phone: '2494000000',
+      address: 'Sucursal principal',
+    },
+  });
+
+  const kiosk = await prisma.kiosk.upsert({
+    where: {
+      customerId_name: {
+        customerId: customer.id,
+        name: 'Sucursal Centro',
+      },
+    },
+    update: {},
+    create: {
+      name: 'Sucursal Centro',
+      address: 'Centro',
+      phone: '2494000001',
+      customerId: customer.id,
+    },
+  });
+  console.log('✓ Kiosko:', kiosk.name);
+
   // ─── Categorías ───────────────────────────────────────────────────────────
   const categories = await Promise.all([
     prisma.category.upsert({ where: { name: 'Bebidas' }, update: {}, create: { name: 'Bebidas' } }),
@@ -65,16 +93,16 @@ async function main() {
 
   // ─── Proveedores ──────────────────────────────────────────────────────────
   const gonzalez = await prisma.supplier.upsert({
-    where: { id: 1 }, update: {},
-    create: { id: 1, name: 'Distribuidora González', contactName: 'Carlos', phone: '249-555-1234', visitDays: 'Lunes,Jueves' },
+    where: { name: 'Distribuidora González' }, update: {},
+    create: { name: 'Distribuidora González', phone: '249-555-1234' },
   });
   const arcor = await prisma.supplier.upsert({
-    where: { id: 2 }, update: {},
-    create: { id: 2, name: 'Arcor', contactName: 'Juan', phone: '011-5555-1234', email: 'juan@arcor.com', visitDays: 'Martes' },
+    where: { name: 'Arcor' }, update: {},
+    create: { name: 'Arcor', phone: '011-5555-1234', email: 'juan@arcor.com' },
   });
   const serenisima = await prisma.supplier.upsert({
-    where: { id: 3 }, update: {},
-    create: { id: 3, name: 'La Serenísima', contactName: 'María', phone: '0800-333-5544', visitDays: 'Lunes' },
+    where: { name: 'La Serenísima' }, update: {},
+    create: { name: 'La Serenísima', phone: '0800-333-5544' },
   });
   console.log('✓ Proveedores creados');
 

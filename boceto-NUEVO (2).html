@@ -1,0 +1,2008 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Boceto Desktop — Sistema de Gestión para Kioscos</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Segoe UI', Arial, sans-serif;
+    background: #e8eaf0;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── Barra superior del boceto (fuera de la app) ── */
+  .boceto-bar {
+    background: #1a1a2e;
+    color: #aab;
+    font-size: 0.78rem;
+    padding: 8px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+  }
+  .boceto-bar strong { color: #fff; }
+
+  .screen-selector {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .screen-btn {
+    background: #2d3561;
+    color: #c8ceea;
+    border: 1px solid #3d4680;
+    border-radius: 14px;
+    padding: 3px 11px;
+    font-size: 0.72rem;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .screen-btn:hover { background: #3d4680; color: #fff; }
+  .screen-btn.active { background: #4caf82; color: #fff; border-color: #4caf82; font-weight: 700; }
+
+  /* ── Ventana del navegador simulada ── */
+  .browser-frame {
+    flex: 1;
+    margin: 12px 16px 16px;
+    background: #fff;
+    border-radius: 10px;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.18);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    min-height: calc(100vh - 80px);
+  }
+
+  /* Barra del navegador */
+  .browser-chrome {
+    background: #f1f3f5;
+    border-bottom: 1px solid #dde;
+    padding: 8px 14px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+  }
+  .browser-dots { display: flex; gap: 5px; }
+  .browser-dots span {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: #ddd;
+  }
+  .browser-dots span:nth-child(1) { background: #ff5f57; }
+  .browser-dots span:nth-child(2) { background: #febc2e; }
+  .browser-dots span:nth-child(3) { background: #28c840; }
+  .browser-url {
+    flex: 1;
+    background: #fff;
+    border: 1px solid #dde;
+    border-radius: 6px;
+    padding: 4px 12px;
+    font-size: 0.78rem;
+    color: #666;
+  }
+
+  /* ── Layout principal de la app ── */
+  .app-shell {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* ── Sidebar ── */
+  .sidebar {
+    width: 220px;
+    background: #1c2050;
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    overflow-y: auto;
+  }
+
+  .sidebar-logo {
+    padding: 20px 18px 16px;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+  }
+  .sidebar-logo .logo-name {
+    font-size: 1rem;
+    font-weight: 800;
+    color: #fff;
+  }
+  .sidebar-logo .logo-sub {
+    font-size: 0.7rem;
+    color: #8892c8;
+    margin-top: 2px;
+  }
+
+  .sidebar-kiosk {
+    padding: 12px 18px;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .kiosk-avatar {
+    width: 32px; height: 32px;
+    background: #4caf82;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.85rem;
+    font-weight: 800;
+    color: #fff;
+    flex-shrink: 0;
+  }
+  .kiosk-info .kiosk-name-s { font-size: 0.82rem; font-weight: 700; color: #fff; }
+  .kiosk-info .kiosk-plan  { font-size: 0.68rem; color: #8892c8; }
+
+  .sidebar-nav { padding: 10px 0; flex: 1; }
+
+  .nav-section-label {
+    font-size: 0.62rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #5a6399;
+    padding: 10px 18px 5px;
+  }
+
+  .nav-link {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 18px;
+    color: #8892c8;
+    font-size: 0.83rem;
+    cursor: pointer;
+    border-radius: 0;
+    transition: all 0.12s;
+    border: none;
+    background: none;
+    width: 100%;
+    text-align: left;
+  }
+  .nav-link:hover { background: rgba(255,255,255,0.06); color: #fff; }
+  .nav-link.active { background: rgba(76,175,130,0.15); color: #4caf82; font-weight: 600; border-left: 3px solid #4caf82; }
+  .nav-link .icon { font-size: 1rem; min-width: 18px; }
+  .nav-link .badge {
+    margin-left: auto;
+    background: #e74c3c;
+    color: #fff;
+    font-size: 0.62rem;
+    font-weight: 700;
+    border-radius: 10px;
+    padding: 1px 6px;
+  }
+
+  /* ── Contenido principal ── */
+  .main-content {
+    flex: 1;
+    overflow-y: auto;
+    background: #f5f6fa;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Top bar de la app */
+  .topbar {
+    background: #fff;
+    border-bottom: 1px solid #e8eaf0;
+    padding: 14px 28px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+  .topbar h1 { font-size: 1.1rem; font-weight: 700; color: #1a1a2e; }
+  .topbar .topbar-actions { display: flex; gap: 10px; align-items: center; }
+  .btn-primary {
+    background: #1c2050;
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    padding: 8px 18px;
+    font-size: 0.83rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .btn-primary:hover { background: #2d3561; }
+  .btn-outline {
+    background: #fff;
+    color: #1c2050;
+    border: 1.5px solid #1c2050;
+    border-radius: 8px;
+    padding: 7px 16px;
+    font-size: 0.83rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .notif-btn {
+    background: none;
+    border: 1.5px solid #e8eaf0;
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-size: 1rem;
+    cursor: pointer;
+    position: relative;
+  }
+  .notif-dot {
+    position: absolute;
+    top: 4px; right: 4px;
+    width: 8px; height: 8px;
+    background: #e74c3c;
+    border-radius: 50%;
+  }
+
+  /* Pantalla oculta/visible */
+  .screen { display: none; }
+  .screen.active { display: flex; flex-direction: column; flex: 1; }
+
+  /* ── Componentes de contenido ── */
+  .page-body { padding: 24px 28px; flex: 1; }
+
+  /* Cards de KPI */
+  .kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+  .kpi-card {
+    background: #fff;
+    border-radius: 12px;
+    padding: 18px 20px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+  }
+  .kpi-card .kpi-label {
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    color: #888;
+    letter-spacing: 0.06em;
+    margin-bottom: 6px;
+  }
+  .kpi-card .kpi-value {
+    font-size: 1.6rem;
+    font-weight: 800;
+    color: #1a1a2e;
+  }
+  .kpi-card .kpi-trend {
+    font-size: 0.75rem;
+    color: #4caf82;
+    margin-top: 4px;
+  }
+  .kpi-card .kpi-trend.down { color: #e74c3c; }
+
+  /* Grid de dos columnas */
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .two-col-7-3 { display: grid; grid-template-columns: 2fr 1fr; gap: 20px; }
+
+  /* Card genérica */
+  .card {
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+    overflow: hidden;
+  }
+  .card-header {
+    padding: 14px 20px;
+    border-bottom: 1px solid #eee;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .card-header h3 { font-size: 0.88rem; font-weight: 700; color: #1a1a2e; }
+  .card-body { padding: 16px 20px; }
+
+  /* Tabla */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.82rem;
+  }
+  thead th {
+    background: #f8f9ff;
+    color: #555;
+    font-weight: 700;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 10px 14px;
+    text-align: left;
+    border-bottom: 1px solid #eee;
+  }
+  tbody td {
+    padding: 11px 14px;
+    border-bottom: 1px solid #f5f5f5;
+    color: #333;
+    vertical-align: middle;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover td { background: #f8f9ff; }
+
+  .badge {
+    display: inline-block;
+    font-size: 0.68rem;
+    font-weight: 700;
+    padding: 2px 9px;
+    border-radius: 20px;
+  }
+  .badge-ok     { background: #e8f8ee; color: #2e7d32; }
+  .badge-low    { background: #fdecea; color: #c0392b; }
+  .badge-income { background: #e8f8ee; color: #2e7d32; }
+  .badge-expense{ background: #fdecea; color: #c0392b; }
+
+  /* Alerta de stock */
+  .alert-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 20px;
+    border-bottom: 1px solid #fff3f3;
+    font-size: 0.82rem;
+  }
+  .alert-row:last-child { border-bottom: none; }
+  .alert-dot { width: 8px; height: 8px; background: #e74c3c; border-radius: 50%; flex-shrink: 0; }
+  .alert-row .alert-name { flex: 1; color: #c0392b; font-weight: 600; }
+  .alert-row .alert-stock { color: #666; }
+  .alert-row .alert-action { color: #2d3561; font-size: 0.75rem; font-weight: 700; cursor: pointer; }
+
+  /* Formulario desktop */
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .form-grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+  .form-full { grid-column: 1 / -1; }
+
+  .field-group { display: flex; flex-direction: column; gap: 6px; }
+  .field-label {
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: #666;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .field-input {
+    border: 1.5px solid #dde;
+    border-radius: 8px;
+    padding: 9px 13px;
+    font-size: 0.85rem;
+    color: #333;
+    background: #f9faff;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .field-input span { color: #aaa; }
+  .field-input.placeholder { color: #aaa; }
+
+  /* Radio buttons */
+  .radio-group { display: flex; gap: 20px; }
+  .radio-opt {
+    display: flex; align-items: center; gap: 7px;
+    font-size: 0.83rem; color: #333; cursor: pointer;
+  }
+  .radio-dot {
+    width: 16px; height: 16px;
+    border: 2px solid #2d3561;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .radio-dot.on::after {
+    content: '';
+    width: 8px; height: 8px;
+    background: #2d3561;
+    border-radius: 50%;
+  }
+
+  /* Preview de precios */
+  .preview-table tbody td:last-child { color: #4caf82; font-weight: 700; }
+
+  /* P&L */
+  .pl-section { margin-bottom: 16px; }
+  .pl-section-title {
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    color: #888;
+    letter-spacing: 0.06em;
+    margin-bottom: 8px;
+  }
+  .pl-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 8px 0;
+    border-bottom: 1px solid #f0f0f0;
+    font-size: 0.85rem;
+    color: #333;
+  }
+  .pl-row.subtotal { font-weight: 700; color: #1a1a2e; border-bottom: 2px solid #dde; }
+  .pl-total {
+    background: #1c2050;
+    color: #fff;
+    border-radius: 10px;
+    padding: 16px 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 16px;
+    font-size: 1rem;
+    font-weight: 800;
+  }
+  .pl-total .trend-tag {
+    background: rgba(76,175,130,0.25);
+    color: #4caf82;
+    border-radius: 20px;
+    padding: 3px 12px;
+    font-size: 0.78rem;
+    font-weight: 700;
+  }
+
+  /* AFIP */
+  .afip-connected {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: #e8f8ee;
+    color: #2e7d32;
+    border-radius: 20px;
+    padding: 4px 14px;
+    font-size: 0.75rem;
+    font-weight: 700;
+  }
+  .invoice-list .invoice-row {
+    display: flex;
+    align-items: center;
+    padding: 11px 14px;
+    border-bottom: 1px solid #f5f5f5;
+    font-size: 0.83rem;
+    gap: 16px;
+  }
+  .invoice-row:last-child { border-bottom: none; }
+  .invoice-row .inv-num { font-weight: 700; color: #1a1a2e; flex: 1; }
+  .invoice-row .inv-date { color: #888; min-width: 90px; }
+  .invoice-row .inv-amount { font-weight: 700; color: #1c2050; min-width: 80px; text-align: right; }
+  .pdf-btn {
+    background: #eef0fb;
+    color: #2d3561;
+    border: none;
+    border-radius: 6px;
+    padding: 4px 12px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .btn-danger {
+    background: #fdecea;
+    color: #c0392b;
+    border: 1.5px solid #f5c6c6;
+    border-radius: 8px;
+    padding: 8px 18px;
+    font-size: 0.83rem;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  /* Historial filtros */
+  .filter-tabs {
+    display: flex;
+    gap: 4px;
+    background: #f0f2f8;
+    border-radius: 8px;
+    padding: 3px;
+    width: fit-content;
+  }
+  .filter-tab {
+    padding: 5px 16px;
+    border-radius: 6px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: #666;
+    cursor: pointer;
+    border: none;
+    background: none;
+  }
+  .filter-tab.active { background: #fff; color: #1a1a2e; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
+
+  /* Proveedores */
+  .supplier-card {
+    background: #fff;
+    border-radius: 10px;
+    padding: 16px 20px;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+    cursor: pointer;
+    transition: box-shadow 0.15s;
+  }
+  .supplier-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.1); }
+  .supplier-avatar {
+    width: 40px; height: 40px;
+    background: #eef0fb;
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.1rem;
+    flex-shrink: 0;
+  }
+  .supplier-info { flex: 1; }
+  .supplier-info .s-name { font-size: 0.9rem; font-weight: 700; color: #1a1a2e; }
+  .supplier-info .s-meta { font-size: 0.75rem; color: #777; margin-top: 3px; }
+  .supplier-arrow { color: #ccc; font-size: 1rem; }
+
+  /* ── Semáforo dashboard ── */
+  .semaforo-card { background: #fff; border-radius: 12px; padding: 18px 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
+
+  /* ── Panel salud del negocio (P&L) ── */
+  .salud-panel { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 20px; }
+  .salud-item { background: #fff; border-radius: 12px; padding: 16px 18px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); border-left: 4px solid #ddd; }
+  .salud-item.verde   { border-left-color: #4caf82; }
+  .salud-item.amarillo{ border-left-color: #f39c12; }
+  .salud-item.rojo    { border-left-color: #e74c3c; }
+  .salud-item .s-pregunta  { font-size: 0.75rem; color: #888; margin-bottom: 6px; }
+  .salud-item .s-resultado { font-size: 0.9rem; font-weight: 800; color: #1a1a2e; margin-bottom: 4px; display: flex; align-items: center; gap: 8px; }
+  .salud-item .s-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+  .salud-item .s-dot.verde    { background: #4caf82; }
+  .salud-item .s-dot.amarillo { background: #f39c12; }
+  .salud-item .s-dot.rojo     { background: #e74c3c; }
+  .salud-item .s-detalle { font-size: 0.72rem; color: #777; margin-top: 4px; }
+
+  /* ── Punto de equilibrio ── */
+  .equilibrio-banner { background: #f8f9ff; border: 1.5px solid #dde; border-radius: 10px; padding: 14px 20px; margin-bottom: 24px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .equilibrio-banner .eq-label { font-size: 0.83rem; color: #555; }
+  .equilibrio-banner .eq-value { font-size: 1rem; font-weight: 800; color: #1c2050; }
+  .equilibrio-banner .eq-tag   { background: #e8f8ee; color: #2e7d32; border-radius: 20px; padding: 3px 14px; font-size: 0.75rem; font-weight: 700; white-space: nowrap; }
+
+  /* ── Top 3 productos ── */
+  .top3-card { background: #fff; border-radius: 12px; padding: 16px 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); margin-bottom: 20px; }
+  .top3-card .top3-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  .top3-card .top3-head h3 { font-size: 0.88rem; font-weight: 700; color: #1a1a2e; }
+  .top3-card .top3-head span { font-size: 0.75rem; color: #888; }
+  .top3-items { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .top3-item  { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; background: #f8f9ff; border-radius: 8px; }
+  .top3-rank  { font-size: 1.1rem; font-weight: 800; min-width: 22px; }
+  .top3-rank.r1 { color: #f39c12; }
+  .top3-rank.r2 { color: #aaa; }
+  .top3-rank.r3 { color: #cd7f32; }
+  .top3-nombre { font-size: 0.83rem; font-weight: 700; color: #1a1a2e; }
+  .top3-cant   { font-size: 0.75rem; color: #888; margin-top: 2px; }
+
+  /* ── Vencimiento badges ── */
+  .venc-3m   { background: #fff3cd; color: #856404; font-size: 0.68rem; font-weight: 700; padding: 2px 7px; border-radius: 10px; white-space: nowrap; }
+  .venc-2m   { background: #ffe0b2; color: #e65100; font-size: 0.68rem; font-weight: 700; padding: 2px 7px; border-radius: 10px; white-space: nowrap; }
+  .venc-1m   { background: #fdecea; color: #c0392b; font-size: 0.68rem; font-weight: 700; padding: 2px 7px; border-radius: 10px; white-space: nowrap; }
+  .venc-dias { background: #e74c3c; color: #fff;    font-size: 0.68rem; font-weight: 700; padding: 2px 7px; border-radius: 10px; white-space: nowrap; }
+
+  /* ── Estado stock: Alerta (nivel intermedio) ── */
+  .badge-alerta { background: #fff3cd; color: #856404; }
+
+  /* ── Margen en venta ── */
+  .margen-venta { background: #e8f8ee; border-radius: 8px; padding: 9px 12px; font-size: 0.8rem; color: #2e7d32; font-weight: 600; margin-top: 8px; text-align: center; }
+
+  /* ── Badge visita hoy ── */
+  .visita-hoy { background: #e8f8ee; color: #2e7d32; font-size: 0.68rem; font-weight: 700; padding: 2px 9px; border-radius: 10px; margin-left: 6px; }
+
+  /* ── Bajo mínimo en detalle proveedor ── */
+  .bajo-min-banner { background: #fdecea; border-radius: 10px; padding: 14px 18px; margin-top: 16px; }
+  .bajo-min-title  { font-size: 0.72rem; font-weight: 700; color: #c0392b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 10px; }
+  .bajo-min-row    { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid rgba(192,57,43,0.15); font-size: 0.83rem; color: #c0392b; font-weight: 600; }
+  .bajo-min-row:last-child { border-bottom: none; }
+
+  /* ── Productos del período (historial) ── */
+  .periodo-card { background: #fff; border-radius: 12px; padding: 16px 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); margin-bottom: 20px; }
+  .periodo-card .periodo-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  .periodo-card .periodo-head h3 { font-size: 0.88rem; font-weight: 700; color: #1a1a2e; }
+  .periodo-row { display: flex; align-items: center; gap: 12px; padding: 7px 0; border-bottom: 1px solid #f5f5f5; }
+  .periodo-row:last-child { border-bottom: none; }
+  .periodo-num    { font-size: 0.75rem; font-weight: 800; color: #ccc; min-width: 18px; }
+  .periodo-nombre { flex: 1; font-size: 0.83rem; font-weight: 600; color: #1a1a2e; }
+  .periodo-cant   { font-size: 0.8rem; color: #888; min-width: 60px; text-align: right; }
+  .periodo-bar-wrap { width: 80px; height: 5px; background: #f0f2f8; border-radius: 3px; }
+  .periodo-bar-fill { height: 5px; border-radius: 3px; background: #4caf82; }
+</style>
+</head>
+<body>
+
+<!-- Barra de boceto (fuera de la app simulada) -->
+<div class="boceto-bar">
+  <span><strong>Boceto Desktop</strong> — Sistema de Gestión para Kioscos · Piloto Tandil 2026</span>
+</div>
+
+<!-- Marco del navegador -->
+<div class="browser-frame">
+  <!-- Chrome del navegador -->
+  <div class="browser-chrome">
+    <div class="browser-dots"><span></span><span></span><span></span></div>
+    <div class="browser-url">app.kioscos.ar · Kiosco Don Roberto</div>
+  </div>
+
+  <!-- App shell -->
+  <div class="app-shell">
+
+    <!-- Sidebar -->
+    <div class="sidebar">
+      <div class="sidebar-logo">
+        <div class="logo-name">KioscoApp</div>
+        <div class="logo-sub">Sistema de gestión</div>
+      </div>
+
+      <div class="sidebar-kiosk">
+        <div class="kiosk-avatar">K</div>
+        <div class="kiosk-info">
+          <div class="kiosk-name-s">Kiosco Don Roberto</div>
+          <div class="kiosk-plan">Plan Base · 1 sucursal</div>
+        </div>
+      </div>
+
+      <nav class="sidebar-nav">
+        <div class="nav-section-label">Principal</div>
+        <button class="nav-link" id="nl-sale" onclick="goTo('sale',null)">
+          <span class="icon">💰</span> Registrar venta
+        </button>
+        <button class="nav-link" id="nl-history" onclick="goTo('history',null)">
+          <span class="icon">📋</span> Historial de ventas
+        </button>
+
+        <div class="nav-section-label">Inventario</div>
+        <button class="nav-link" id="nl-stock" onclick="goTo('stock',null)">
+          <span class="icon">📦</span> Stock
+          <span class="badge">2</span>
+        </button>
+        <button class="nav-link" id="nl-prices" onclick="goTo('prices',null)">
+          <span class="icon">🏷️</span> Actualizar precios
+        </button>
+
+        <div class="nav-section-label">Finanzas</div>
+        <button class="nav-link" id="nl-cashflow" onclick="goTo('cashflow',null)">
+          <span class="icon">💸</span> Gastos
+        </button>
+        <button class="nav-link" id="nl-afip" onclick="goTo('afip',null)">
+          <span class="icon">🧾</span> Facturación AFIP
+        </button>
+        <button class="nav-link active" id="nl-pl" onclick="goTo('pl',null)">
+          <span class="icon">📊</span> Resultados del mes
+        </button>
+
+        <div class="nav-section-label">Gestión</div>
+        <button class="nav-link" id="nl-suppliers" onclick="goTo('suppliers',null)">
+          <span class="icon">🤝</span> Proveedores
+        </button>
+        <button class="nav-link" id="nl-caja" onclick="goTo('caja',null)">
+          <span class="icon">🏧</span> Caja
+        </button>
+        <button class="nav-link" id="nl-clients" onclick="goTo('clients',null)">
+          <span class="icon">⭐</span> Clientes / Puntos
+        </button>
+      </nav>
+    </div>
+
+    <!-- Contenido principal -->
+    <div class="main-content">
+
+      <!-- ══ PANTALLA 2: Registrar venta ══ -->
+      <div class="screen" id="sc-sale">
+        <div class="topbar">
+          <h1>Registrar venta</h1>
+          <div class="topbar-actions">
+            <span style="font-size:0.8rem;color:#888;">Viernes 16 de mayo, 2026</span>
+          </div>
+        </div>
+        <div class="page-body">
+          <div class="two-col-7-3">
+            <!-- Panel de búsqueda / items -->
+            <div>
+              <div class="card" style="margin-bottom:16px;">
+                <div class="card-header"><h3>Agregar productos</h3></div>
+                <div class="card-body">
+                  <div style="display:flex;gap:10px;margin-bottom:16px;">
+                    <div class="field-input" style="flex:1;font-size:1rem;padding:12px 16px;border-color:#1c2050;">🔍 Buscar producto por nombre o código de barras...</div>
+                    <button class="btn-outline">📷 Escanear</button>
+                  </div>
+                  <!-- Resultado de búsqueda -->
+                  <div style="background:#f8f9ff;border-radius:10px;padding:14px 16px;border:1.5px solid #dde;">
+                    <div style="font-size:0.88rem;font-weight:700;color:#1a1a2e;">Coca Cola 500ml</div>
+                    <div style="display:flex;align-items:center;gap:8px;margin:6px 0;">
+                      <span style="font-size:1.1rem;font-weight:800;color:#2e7d32;">24 u. disponibles</span>
+                      <span style="font-size:0.8rem;color:#888;">· $850 c/u</span>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:12px;margin-top:10px;">
+                      <button style="background:#eef0fb;border:1.5px solid #dde;border-radius:7px;width:32px;height:32px;font-size:1rem;cursor:pointer;">−</button>
+                      <span style="font-size:1rem;font-weight:700;min-width:20px;text-align:center;">1</span>
+                      <button style="background:#1c2050;border:none;border-radius:7px;width:32px;height:32px;font-size:1rem;cursor:pointer;color:#fff;">+</button>
+                      <span style="font-size:0.85rem;color:#666;">= $850</span>
+                      <button style="margin-left:auto;background:#e8f8ee;color:#2e7d32;border:none;border-radius:7px;padding:6px 14px;font-size:0.8rem;font-weight:700;cursor:pointer;">+ Agregar</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Items agregados -->
+              <div class="card">
+                <div class="card-header"><h3>Items en la venta</h3></div>
+                <table>
+                  <thead>
+                    <tr><th>Producto</th><th>Cantidad</th><th>Precio unit.</th><th>Subtotal</th><th></th></tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>Coca Cola 500ml</td>
+                      <td>1</td>
+                      <td>$850</td>
+                      <td><strong>$850</strong></td>
+                      <td style="color:#e74c3c;cursor:pointer;">✕</td>
+                    </tr>
+                    <tr>
+                      <td>Beldent × 1u</td>
+                      <td>1</td>
+                      <td>$400</td>
+                      <td><strong>$400</strong></td>
+                      <td style="color:#e74c3c;cursor:pointer;">✕</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- Panel de totales -->
+            <div class="card" style="height:fit-content;">
+              <div class="card-header"><h3>Resumen</h3></div>
+              <div class="card-body">
+                <div class="pl-row"><span>Subtotal</span><span>$1.250</span></div>
+                <div class="pl-row subtotal" style="margin-top:4px;"><span>TOTAL</span><span style="font-size:1.1rem;">$1.250</span></div>
+
+                <!-- Medio de pago -->
+                <div style="margin-top:16px;">
+                  <div class="field-label" style="margin-bottom:8px;">Medio de pago</div>
+                  <div style="display:flex;gap:8px;">
+                    <button id="pay-cash" onclick="selectPago('cash')" style="flex:1;padding:10px 6px;border-radius:9px;border:2px solid #1c2050;background:#1c2050;color:#fff;font-size:0.8rem;font-weight:700;cursor:pointer;">💵 Efectivo</button>
+                    <button id="pay-card" onclick="selectPago('card')" style="flex:1;padding:10px 6px;border-radius:9px;border:2px solid #dde;background:#fff;color:#666;font-size:0.8rem;font-weight:600;cursor:pointer;">💳 Tarjeta</button>
+                    <button id="pay-both" onclick="selectPago('both')" style="flex:1;padding:10px 6px;border-radius:9px;border:2px solid #dde;background:#fff;color:#666;font-size:0.8rem;font-weight:600;cursor:pointer;">⚡ Mixto</button>
+                  </div>
+                </div>
+
+                <!-- Campo vuelto (solo efectivo) -->
+                <div id="cash-detail" style="margin-top:12px;background:#f8f9ff;border-radius:8px;padding:10px 12px;display:block;">
+                  <div class="field-label" style="margin-bottom:6px;">Recibido del cliente</div>
+                  <div class="field-input">$1.500</div>
+                  <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:0.85rem;">
+                    <span style="color:#555;">Vuelto</span>
+                    <span style="font-weight:800;color:#2e7d32;font-size:1rem;">$250</span>
+                  </div>
+                </div>
+
+                <!-- Detalle mixto (oculto por defecto) -->
+                <div id="both-detail" style="margin-top:12px;background:#f8f9ff;border-radius:8px;padding:10px 12px;display:none;">
+                  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+                    <div class="field-group">
+                      <div class="field-label">Efectivo</div>
+                      <div class="field-input">$750</div>
+                    </div>
+                    <div class="field-group">
+                      <div class="field-label">Tarjeta</div>
+                      <div class="field-input">$500</div>
+                    </div>
+                  </div>
+                  <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:0.83rem;color:#555;">
+                    <span>Total parciales</span><span style="font-weight:700;color:#1a1a2e;">$1.250 ✓</span>
+                  </div>
+                </div>
+
+                <!-- Fidelización: identificar cliente -->
+                <div style="margin-top:14px;border-top:1px solid #eee;padding-top:12px;">
+                  <div class="field-label" style="margin-bottom:8px;">Cliente con puntos (opcional)</div>
+                  <div style="display:flex;gap:8px;margin-bottom:8px;">
+                    <div class="field-input" style="flex:1;color:#aaa;font-size:0.82rem;">🔍 Teléfono o código de cliente...</div>
+                    <button class="btn-outline" style="font-size:0.78rem;padding:6px 10px;" onclick="goTo('clients',null)">＋ Nuevo</button>
+                  </div>
+                  <div style="background:#e8f8ee;border-radius:8px;padding:9px 12px;display:flex;justify-content:space-between;align-items:center;">
+                    <div>
+                      <div style="font-size:0.85rem;font-weight:700;color:#1a1a2e;">Juan García · #00142</div>
+                      <div style="font-size:0.75rem;color:#2e7d32;margin-top:2px;">320 pts actuales · +12 pts con esta compra</div>
+                    </div>
+                    <button style="background:none;border:none;color:#bbb;font-size:1rem;cursor:pointer;">✕</button>
+                  </div>
+                </div>
+
+                <div class="margen-venta">Estás ganando $380 en esta venta (margen 30%)</div>
+                <button class="btn-primary" style="width:100%;margin-top:14px;padding:12px;font-size:0.9rem;" onclick="goTo('history',null)">✓ Confirmar venta</button>
+                <button style="width:100%;margin-top:8px;background:none;border:1.5px solid #dde;border-radius:8px;padding:9px;font-size:0.83rem;color:#666;cursor:pointer;">Cancelar</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ══ PANTALLA 3: Historial ══ -->
+      <div class="screen" id="sc-history">
+        <div class="topbar">
+          <h1>Historial de ventas</h1>
+          <div class="topbar-actions">
+            <div class="filter-tabs">
+              <button class="filter-tab active">Hoy</button>
+              <button class="filter-tab">Semana</button>
+              <button class="filter-tab">Mes</button>
+            </div>
+          </div>
+        </div>
+        <div class="page-body">
+          <div class="card">
+            <div class="card-header"><h3>HOY — 16 de mayo</h3><span style="font-size:0.8rem;color:#888;">27 ventas · $84.500</span></div>
+            <table>
+              <thead>
+                <tr><th>Hora</th><th>Productos</th><th>Total</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>14:32</td><td>Coca Cola 500ml + Beldent</td><td><strong>$1.250</strong></td></tr>
+                <tr><td>13:15</td><td>Doritos Clásico + Agua Villavicencio</td><td><strong>$2.100</strong></td></tr>
+                <tr><td>11:40</td><td>Oreo Original + Mentitas + Fanta 500ml</td><td><strong>$3.450</strong></td></tr>
+                <tr><td>10:05</td><td>Chicles Beldent x1</td><td><strong>$850</strong></td></tr>
+                <tr><td>09:20</td><td>Papel A4 + Lapicera BIC azul</td><td><strong>$1.800</strong></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- ══ PANTALLA 4: Stock ══ -->
+      <div class="screen" id="sc-stock">
+        <div class="topbar">
+          <h1>Stock de productos</h1>
+          <div class="topbar-actions">
+            <input type="text" placeholder="🔍 Buscar producto..." style="border:1.5px solid #dde;border-radius:8px;padding:7px 14px;font-size:0.83rem;color:#333;width:220px;">
+            <select style="border:1.5px solid #dde;border-radius:8px;padding:7px 14px;font-size:0.83rem;color:#555;">
+              <option>Todos</option>
+              <option>🔴 Críticos</option>
+              <option>⏰ Por vencer</option>
+              <option>💤 Sin movimiento (30 días)</option>
+            </select>
+            <button class="btn-primary" onclick="goTo('product',null)">+ Agregar producto</button>
+          </div>
+        </div>
+        <div class="page-body">
+          <!-- Top 3 más vendidos del mes -->
+          <div class="top3-card">
+            <div class="top3-head">
+              <h3>Top 3 productos más vendidos del mes</h3>
+              <span>Mayo 2026 — no pueden faltar en stock</span>
+            </div>
+            <div class="top3-items">
+              <div class="top3-item">
+                <div class="top3-rank r1">1</div>
+                <div><div class="top3-nombre">Coca Cola 500ml</div><div class="top3-cant">612 unidades este mes</div></div>
+              </div>
+              <div class="top3-item">
+                <div class="top3-rank r2">2</div>
+                <div><div class="top3-nombre">Beldent × 1u</div><div class="top3-cant">490 unidades este mes</div></div>
+              </div>
+              <div class="top3-item">
+                <div class="top3-rank r3">3</div>
+                <div><div class="top3-nombre">Doritos Clásico</div><div class="top3-cant">341 unidades este mes</div></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <table>
+              <thead>
+                <tr><th>Producto</th><th>Categoría</th><th>Proveedor</th><th>P. Costo</th><th>P. Venta</th><th>Stock</th><th>Mínimo</th><th>Vencimiento</th><th>Estado</th><th></th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>Coca Cola 1.5L</strong></td>
+                  <td>Bebidas</td>
+                  <td>González</td>
+                  <td>$900</td><td>$1.700</td>
+                  <td>3</td><td>10</td>
+                  <td>—</td>
+                  <td><span class="badge badge-low">🔴 Crítico</span></td>
+                  <td><button class="btn-outline" style="padding:4px 10px;font-size:0.75rem;" onclick="goTo('product',null)">Editar</button></td>
+                </tr>
+                <tr>
+                  <td><strong>Beldent x20u</strong></td>
+                  <td>Golosinas</td>
+                  <td>Arcor</td>
+                  <td>$650</td><td>$850</td>
+                  <td>1</td><td>5</td>
+                  <td>—</td>
+                  <td><span class="badge badge-low">🔴 Crítico</span></td>
+                  <td><button class="btn-outline" style="padding:4px 10px;font-size:0.75rem;" onclick="goTo('product',null)">Editar</button></td>
+                </tr>
+                <tr>
+                  <td><strong>Leche La Serenísima 1L</strong></td>
+                  <td>Lácteos</td>
+                  <td>La Serenísima</td>
+                  <td>$1.100</td><td>$1.650</td>
+                  <td>8</td><td>12</td>
+                  <td><span class="venc-3m">3 meses</span></td>
+                  <td><span class="badge badge-alerta">⚠ Alerta</span></td>
+                  <td><button class="btn-outline" style="padding:4px 10px;font-size:0.75rem;" onclick="goTo('product',null)">Editar</button></td>
+                </tr>
+                <tr>
+                  <td><strong>Yogur Ser × 6u</strong></td>
+                  <td>Lácteos</td>
+                  <td>La Serenísima</td>
+                  <td>$1.400</td><td>$2.100</td>
+                  <td>14</td><td>6</td>
+                  <td><span class="venc-2m">2 meses</span></td>
+                  <td><span class="badge badge-ok">✓ OK</span></td>
+                  <td><button class="btn-outline" style="padding:4px 10px;font-size:0.75rem;" onclick="goTo('product',null)">Editar</button></td>
+                </tr>
+                <tr>
+                  <td><strong>Pepsi 500ml</strong></td>
+                  <td>Bebidas</td>
+                  <td>González</td>
+                  <td>$600</td><td>$950</td>
+                  <td>28</td><td>10</td>
+                  <td>—</td>
+                  <td><span class="badge badge-ok">✓ OK</span></td>
+                  <td><button class="btn-outline" style="padding:4px 10px;font-size:0.75rem;" onclick="goTo('product',null)">Editar</button></td>
+                </tr>
+                <tr>
+                  <td><strong>Doritos Clásico</strong></td>
+                  <td>Snacks</td>
+                  <td>González</td>
+                  <td>$900</td><td>$1.400</td>
+                  <td>15</td><td>6</td>
+                  <td>—</td>
+                  <td><span class="badge badge-ok">✓ OK</span></td>
+                  <td><button class="btn-outline" style="padding:4px 10px;font-size:0.75rem;" onclick="goTo('product',null)">Editar</button></td>
+                </tr>
+                <tr>
+                  <td><strong>Oreo Original</strong></td>
+                  <td>Galletas</td>
+                  <td>Arcor</td>
+                  <td>$800</td><td>$1.200</td>
+                  <td>12</td><td>4</td>
+                  <td>—</td>
+                  <td><span class="badge badge-ok">✓ OK</span></td>
+                  <td><button class="btn-outline" style="padding:4px 10px;font-size:0.75rem;" onclick="goTo('product',null)">Editar</button></td>
+                </tr>
+                <tr>
+                  <td><strong>Fanta 500ml</strong></td>
+                  <td>Bebidas</td>
+                  <td>González</td>
+                  <td>$580</td><td>$900</td>
+                  <td>22</td><td>8</td>
+                  <td>—</td>
+                  <td><span class="badge badge-ok">✓ OK</span></td>
+                  <td><button class="btn-outline" style="padding:4px 10px;font-size:0.75rem;" onclick="goTo('product',null)">Editar</button></td>
+                </tr>
+                <tr>
+                  <td><strong>Mentitas × 1u</strong></td>
+                  <td>Golosinas</td>
+                  <td>Arcor</td>
+                  <td>$400</td><td>$600</td>
+                  <td>9</td><td>10</td>
+                  <td>—</td>
+                  <td><span class="badge badge-alerta">⚠ Alerta</span></td>
+                  <td><button class="btn-outline" style="padding:4px 10px;font-size:0.75rem;" onclick="goTo('product',null)">Editar</button></td>
+                </tr>
+                <tr>
+                  <td><strong>Papel A4 resma</strong></td>
+                  <td>Librería</td>
+                  <td>Marolio</td>
+                  <td>$2.800</td><td>$4.200</td>
+                  <td>5</td><td>3</td>
+                  <td>—</td>
+                  <td><span class="badge badge-ok">✓ OK</span></td>
+                  <td><button class="btn-outline" style="padding:4px 10px;font-size:0.75rem;" onclick="goTo('product',null)">Editar</button></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- ══ PANTALLA 5: Producto ABM ══ -->
+      <div class="screen" id="sc-product">
+        <div class="topbar">
+          <h1>Editar producto</h1>
+          <div class="topbar-actions">
+            <button class="btn-danger" onclick="goTo('stock',null)">Eliminar producto</button>
+            <button class="btn-primary" onclick="goTo('stock',null)">Guardar cambios</button>
+          </div>
+        </div>
+        <div class="page-body">
+          <div class="two-col">
+            <!-- Datos del producto -->
+            <div>
+              <div class="card" style="margin-bottom:16px;">
+                <div class="card-header"><h3>Información del producto</h3></div>
+                <div class="card-body">
+                  <div class="form-grid" style="gap:14px;">
+                    <div class="field-group form-full">
+                      <div class="field-label">Nombre</div>
+                      <div class="field-input">Coca Cola 1.5L</div>
+                    </div>
+                    <div class="field-group">
+                      <div class="field-label">Código de barras</div>
+                      <div class="field-input">7790895001023 <span>📷</span></div>
+                    </div>
+                    <div class="field-group">
+                      <div class="field-label">Categoría</div>
+                      <div class="field-input">Bebidas <span>▼</span></div>
+                    </div>
+                    <div class="field-group">
+                      <div class="field-label">Proveedor</div>
+                      <div class="field-input">Distribuidora González <span>▼</span></div>
+                    </div>
+                    <div class="field-group">
+                      <div class="field-label">Fecha de vencimiento (opcional)</div>
+                      <div class="field-input placeholder">dd/mm/aaaa</div>
+                    </div>
+                    <div class="field-group">
+                      <div class="field-label">Descripción (opcional)</div>
+                      <div class="field-input placeholder">Agregar descripción...</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Precios y stock -->
+            <div>
+              <div class="card" style="margin-bottom:16px;">
+                <div class="card-header"><h3>Precios</h3></div>
+                <div class="card-body">
+                  <div class="form-grid">
+                    <div class="field-group">
+                      <div class="field-label">Precio de costo</div>
+                      <div class="field-input">$900</div>
+                    </div>
+                    <div class="field-group">
+                      <div class="field-label">Precio de venta</div>
+                      <div class="field-input">$1.700</div>
+                    </div>
+                  </div>
+                  <div style="margin-top:12px;background:#f8f9ff;border-radius:8px;padding:10px 14px;font-size:0.8rem;color:#555;">
+                    Margen: <strong style="color:#4caf82;">$800 (47%)</strong>
+                  </div>
+                </div>
+              </div>
+              <div class="card">
+                <div class="card-header"><h3>Stock</h3></div>
+                <div class="card-body">
+                  <div class="form-grid">
+                    <div class="field-group">
+                      <div class="field-label">Stock actual</div>
+                      <div class="field-input">3</div>
+                    </div>
+                    <div class="field-group">
+                      <div class="field-label">Stock mínimo (alerta)</div>
+                      <div class="field-input">10</div>
+                    </div>
+                  </div>
+                  <div style="margin-top:12px;background:#fdecea;border-radius:8px;padding:10px 14px;font-size:0.8rem;color:#c0392b;font-weight:600;">
+                    ⚠ Por debajo del mínimo — revisar pedido a proveedor
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ══ PANTALLA 6: Actualizar precios ══ -->
+      <div class="screen" id="sc-prices">
+        <div class="topbar">
+          <h1>Actualización masiva de precios</h1>
+          <div class="topbar-actions">
+            <button class="btn-primary" onclick="goTo('stock',null)">✓ Confirmar cambio</button>
+          </div>
+        </div>
+        <div class="page-body">
+          <div class="two-col">
+            <!-- Configuración -->
+            <div class="card">
+              <div class="card-header"><h3>Configurar ajuste</h3></div>
+              <div class="card-body" style="display:flex;flex-direction:column;gap:16px;">
+                <div class="field-group">
+                  <div class="field-label">Filtrar por</div>
+                  <div class="radio-group">
+                    <div class="radio-opt"><div class="radio-dot on"></div>Proveedor</div>
+                    <div class="radio-opt"><div class="radio-dot"></div>Categoría</div>
+                  </div>
+                </div>
+                <div class="field-group">
+                  <div class="field-label">Proveedor</div>
+                  <div class="field-input">Arcor <span>▼</span></div>
+                </div>
+                <div class="field-group">
+                  <div class="field-label">Tipo de ajuste</div>
+                  <div class="radio-group">
+                    <div class="radio-opt"><div class="radio-dot on"></div>Porcentaje (%)</div>
+                    <div class="radio-opt"><div class="radio-dot"></div>Valor fijo ($)</div>
+                  </div>
+                </div>
+                <div class="field-group">
+                  <div class="field-label">Aumentar en</div>
+                  <div style="display:flex;align-items:center;gap:10px;">
+                    <div class="field-input" style="width:100px;">15</div>
+                    <span style="font-size:1rem;font-weight:700;color:#1a1a2e;">%</span>
+                  </div>
+                </div>
+                <button class="btn-outline" style="width:fit-content;">Ver vista previa</button>
+              </div>
+            </div>
+
+            <!-- Preview -->
+            <div class="card preview-table">
+              <div class="card-header">
+                <h3>Vista previa — 4 productos afectados</h3>
+                <span style="font-size:0.78rem;color:#888;">Proveedor: Arcor · +15%</span>
+              </div>
+              <table>
+                <thead>
+                  <tr><th>Producto</th><th>Precio actual</th><th>Precio nuevo</th><th>Variación</th></tr>
+                </thead>
+                <tbody>
+                  <tr><td>Chicles Beldent</td><td>$850</td><td>$977</td><td>+$127</td></tr>
+                  <tr><td>Mentitas</td><td>$600</td><td>$690</td><td>+$90</td></tr>
+                  <tr><td>Oreo Original</td><td>$1.200</td><td>$1.380</td><td>+$180</td></tr>
+                  <tr><td>Tita</td><td>$900</td><td>$1.035</td><td>+$135</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ══ PANTALLA 7: Gastos ══ -->
+      <div class="screen" id="sc-cashflow">
+        <div class="topbar">
+          <h1>Gastos</h1>
+          <div class="topbar-actions">
+            <button class="btn-primary">+ Registrar gasto</button>
+          </div>
+        </div>
+        <div class="page-body">
+          <div class="two-col">
+            <!-- Formulario -->
+            <div class="card">
+              <div class="card-header"><h3>Registrar gasto</h3></div>
+              <div class="card-body" style="display:flex;flex-direction:column;gap:16px;">
+                <div class="form-grid">
+                  <div class="field-group">
+                    <div class="field-label">Medio de pago</div>
+                    <div class="field-input">Efectivo <span>▼</span></div>
+                  </div>
+                  <div class="field-group">
+                    <div class="field-label">Categoría</div>
+                    <div class="field-input">Mercadería <span>▼</span></div>
+                  </div>
+                </div>
+                <div class="field-group">
+                  <div class="field-label">Monto</div>
+                  <div class="field-input">$32.000</div>
+                </div>
+                <div class="field-group">
+                  <div class="field-label">Descripción (opcional)</div>
+                  <div class="field-input placeholder">Ej: Compra Arcor martes...</div>
+                </div>
+                <button class="btn-primary" style="width:fit-content;" onclick="goTo('cashflow',null)">Guardar gasto</button>
+              </div>
+            </div>
+
+            <!-- Gastos fijos del local -->
+            <div class="card" style="margin-top:16px;">
+              <div class="card-header"><h3>Gastos fijos del local</h3><span style="font-size:0.78rem;color:#888;">Se usan para calcular tu ganancia real en Resultados del mes</span></div>
+              <div class="card-body" style="display:flex;flex-direction:column;gap:14px;">
+                <div class="form-grid">
+                  <div class="field-group">
+                    <div class="field-label">Concepto</div>
+                    <div class="field-input placeholder">Ej: Alquiler, Luz, Empleado...</div>
+                  </div>
+                  <div class="field-group">
+                    <div class="field-label">Monto mensual</div>
+                    <div class="field-input placeholder">$0</div>
+                  </div>
+                </div>
+                <button class="btn-outline" style="width:fit-content;">+ Agregar gasto fijo</button>
+                <div style="background:#f8f9ff;border-radius:8px;padding:10px 14px;font-size:0.83rem;">
+                  <div class="pl-row" style="padding:4px 0;"><span>Alquiler</span><span style="font-weight:700;">$120.000/mes</span></div>
+                  <div class="pl-row" style="padding:4px 0;"><span>Empleados</span><span style="font-weight:700;">$180.000/mes</span></div>
+                  <div class="pl-row" style="padding:4px 0;border-bottom:none;"><span>Luz / Gas</span><span style="font-weight:700;">$25.000/mes</span></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Últimos gastos -->
+            <div class="card">
+              <div class="card-header"><h3>Últimos gastos registrados</h3></div>
+              <table>
+                <thead>
+                  <tr><th>Fecha</th><th>Categoría</th><th>Descripción</th><th>Monto</th></tr>
+                </thead>
+                <tbody>
+                  <tr><td>16/05</td><td>Mercadería</td><td>Compra Arcor martes</td><td style="color:#c0392b;font-weight:700;">−$32.000</td></tr>
+                  <tr><td>14/05</td><td>Gastos fijos</td><td>Electricidad mayo</td><td style="color:#c0392b;font-weight:700;">−$25.000</td></tr>
+                  <tr><td>14/05</td><td>Mercadería</td><td>Compra González</td><td style="color:#c0392b;font-weight:700;">−$84.000</td></tr>
+                  <tr><td>07/05</td><td>Gastos fijos</td><td>Alquiler mayo</td><td style="color:#c0392b;font-weight:700;">−$120.000</td></tr>
+                  <tr><td>05/05</td><td>Sueldos</td><td>Sueldo empleado</td><td style="color:#c0392b;font-weight:700;">−$180.000</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ══ PANTALLA 8: Proveedores ══ -->
+      <div class="screen" id="sc-suppliers">
+        <div class="topbar">
+          <h1>Proveedores</h1>
+          <div class="topbar-actions">
+            <input type="text" placeholder="🔍 Buscar proveedor..." style="border:1.5px solid #dde;border-radius:8px;padding:7px 14px;font-size:0.83rem;width:220px;">
+            <button class="btn-primary">+ Agregar proveedor</button>
+          </div>
+        </div>
+        <div class="page-body">
+          <div class="two-col">
+            <div>
+              <!-- González primero: visita hoy -->
+              <div class="supplier-card" onclick="goTo('supplier-detail',null)" style="border-left:3px solid #4caf82;">
+                <div class="supplier-avatar">📦</div>
+                <div class="supplier-info">
+                  <div class="s-name">Distribuidora González <span class="visita-hoy">Visita hoy</span></div>
+                  <div class="s-meta">Tel: 249-XXX-XXXX · Contacto: Carlos · Visita: Lunes y Jueves · 23 productos</div>
+                  <div class="s-meta">Última compra: 15/05/2026 — $71.500</div>
+                </div>
+                <div class="supplier-arrow">›</div>
+              </div>
+              <div class="supplier-card" onclick="goTo('supplier-detail',null)">
+                <div class="supplier-avatar">🏭</div>
+                <div class="supplier-info">
+                  <div class="s-name">Arcor</div>
+                  <div class="s-meta">Tel: 011-XXXX-XXXX · Contacto: Juan · Visita: Martes · 12 productos</div>
+                  <div class="s-meta">Última compra: 14/05/2026 — $84.000</div>
+                </div>
+                <div class="supplier-arrow">›</div>
+              </div>
+              <div class="supplier-card" onclick="goTo('supplier-detail',null)">
+                <div class="supplier-avatar">🥛</div>
+                <div class="supplier-info">
+                  <div class="s-name">La Serenísima</div>
+                  <div class="s-meta">Tel: 0800-XXX-XXXX · Contacto: María · Visita: Lunes · 5 productos</div>
+                  <div class="s-meta">Última compra: 10/05/2026 — $28.000</div>
+                </div>
+                <div class="supplier-arrow">›</div>
+              </div>
+              <div class="supplier-card" onclick="goTo('supplier-detail',null)">
+                <div class="supplier-avatar">🍝</div>
+                <div class="supplier-info">
+                  <div class="s-name">Marolio</div>
+                  <div class="s-meta">Tel: 011-XXXX-XXXX · Contacto: Pedro · Visita: Miércoles · 8 productos</div>
+                  <div class="s-meta">Última compra: 08/05/2026 — $42.000</div>
+                </div>
+                <div class="supplier-arrow">›</div>
+              </div>
+            </div>
+            <!-- Resumen -->
+            <div>
+              <div class="kpi-card" style="margin-bottom:16px;">
+                <div class="kpi-label">Total proveedores</div>
+                <div class="kpi-value">4</div>
+              </div>
+              <div class="kpi-card" style="margin-bottom:16px;">
+                <div class="kpi-label">Compras este mes</div>
+                <div class="kpi-value">$225.500</div>
+              </div>
+              <div class="kpi-card">
+                <div class="kpi-label">Próxima visita</div>
+                <div class="kpi-value" style="font-size:1.1rem;">Hoy — González</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ══ PANTALLA 9: Detalle proveedor ══ -->
+      <div class="screen" id="sc-supplier-detail">
+        <div class="topbar">
+          <h1>Arcor</h1>
+          <div class="topbar-actions">
+            <button class="btn-outline" onclick="goTo('suppliers',null)">← Volver</button>
+            <button class="btn-outline">✏ Editar</button>
+            <button class="btn-danger">🗑 Eliminar</button>
+          </div>
+        </div>
+        <div class="page-body">
+          <div class="two-col">
+            <!-- Info + productos -->
+            <div>
+              <div class="card" style="margin-bottom:16px;">
+                <div class="card-header"><h3>Información del proveedor</h3></div>
+                <div class="card-body" style="display:grid;grid-template-columns:1fr 1fr;gap:14px;font-size:0.85rem;">
+                  <div><div class="field-label" style="margin-bottom:4px;">Teléfono</div><div>011-XXXX-XXXX</div></div>
+                  <div><div class="field-label" style="margin-bottom:4px;">Contacto</div><div>Juan</div></div>
+                  <div><div class="field-label" style="margin-bottom:4px;">Email</div><div>juan@arcor.com</div></div>
+                  <div><div class="field-label" style="margin-bottom:4px;">Día de visita</div><div>Martes</div></div>
+                </div>
+              </div>
+              <div class="card">
+                <div class="card-header"><h3>Productos asociados (12)</h3><button class="btn-outline" style="font-size:0.75rem;padding:4px 10px;">+ Asociar</button></div>
+                <table>
+                  <thead><tr><th>Producto</th><th>Stock actual</th><th>Stock mínimo</th></tr></thead>
+                  <tbody>
+                    <tr><td>Chicles Beldent x20u</td><td><span class="badge badge-low">1 u.</span></td><td>5 u.</td></tr>
+                    <tr><td>Mentitas</td><td>18 u.</td><td>5 u.</td></tr>
+                    <tr><td>Oreo Original</td><td>12 u.</td><td>4 u.</td></tr>
+                    <tr><td>Tita</td><td>8 u.</td><td>3 u.</td></tr>
+                    <tr><td style="color:#2d3561;cursor:pointer;" colspan="3">+ 8 productos más...</td></tr>
+                  </tbody>
+                </table>
+                <!-- Productos bajo mínimo de este proveedor -->
+                <div class="bajo-min-banner">
+                  <div class="bajo-min-title">⚠ Pedí esto hoy — bajo el mínimo</div>
+                  <div class="bajo-min-row">
+                    <span>Chicles Beldent x20u</span>
+                    <span>1 u. (mín. 5) — pedí al menos 20</span>
+                  </div>
+                  <div class="bajo-min-row">
+                    <span>Mentitas × 1u</span>
+                    <span>9 u. (mín. 10) — pedí al menos 10</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Historial compras -->
+            <div class="card">
+              <div class="card-header"><h3>Historial de compras</h3><span style="font-size:0.8rem;color:#888;">Total: $223.500</span></div>
+              <table>
+                <thead><tr><th>Fecha</th><th>Día</th><th>Monto</th></tr></thead>
+                <tbody>
+                  <tr><td>14/05/2026</td><td>Martes</td><td><strong>$84.000</strong></td></tr>
+                  <tr><td>07/05/2026</td><td>Martes</td><td><strong>$71.500</strong></td></tr>
+                  <tr><td>30/04/2026</td><td>Martes</td><td><strong>$68.000</strong></td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ══ PANTALLA 10: Facturación AFIP ══ -->
+      <div class="screen" id="sc-afip">
+        <div class="topbar">
+          <h1>Facturación AFIP</h1>
+          <div class="topbar-actions">
+            <span class="afip-connected">✓ Conectado a AFIP</span>
+            <button class="btn-primary">+ Nueva factura</button>
+          </div>
+        </div>
+        <div class="page-body">
+          <div class="two-col">
+            <!-- Formulario -->
+            <div class="card">
+              <div class="card-header"><h3>Nueva factura</h3></div>
+              <div class="card-body" style="display:flex;flex-direction:column;gap:14px;">
+                <div class="form-grid">
+                  <div class="field-group">
+                    <div class="field-label">Tipo de comprobante</div>
+                    <div class="field-input" style="font-weight:700;">Factura C — Consumidor final</div>
+                  </div>
+                  <div class="field-group">
+                    <div class="field-label">Fecha</div>
+                    <div class="field-input">16/05/2026</div>
+                  </div>
+                </div>
+                <div class="field-group">
+                  <div class="field-label">Detalle</div>
+                  <div style="background:#f8f9ff;border:1.5px solid #dde;border-radius:8px;padding:12px 14px;font-size:0.83rem;">
+                    <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #eee;">
+                      <span>Mercadería varios</span><span>$1.250</span>
+                    </div>
+                  </div>
+                  <button class="btn-outline" style="margin-top:8px;width:fit-content;">+ Agregar ítem</button>
+                </div>
+                <div style="background:#f8f9ff;border-radius:8px;padding:12px 14px;">
+                  <div class="pl-row"><span>Subtotal</span><span>$1.250</span></div>
+                  <div class="pl-row" style="font-size:0.78rem;color:#888;"><span>IVA incluido en el precio</span><span>—</span></div>
+                  <div class="pl-row subtotal"><span>Total</span><span>$1.250</span></div>
+                </div>
+                <button class="btn-primary" style="width:fit-content;">Generar y enviar a AFIP</button>
+              </div>
+            </div>
+
+            <!-- Historial -->
+            <div class="card invoice-list">
+              <div class="card-header"><h3>Facturas emitidas</h3><span style="font-size:0.8rem;color:#888;">Mayo 2026</span></div>
+              <div class="invoice-row">
+                <div class="inv-num">FC-C 0001-00000012</div>
+                <div class="inv-date">16/05/2026</div>
+                <div class="inv-amount">$1.250</div>
+                <button class="pdf-btn">PDF</button>
+              </div>
+              <div class="invoice-row">
+                <div class="inv-num">FC-C 0001-00000011</div>
+                <div class="inv-date">15/05/2026</div>
+                <div class="inv-amount">$3.400</div>
+                <button class="pdf-btn">PDF</button>
+              </div>
+              <div class="invoice-row">
+                <div class="inv-num">FC-C 0001-00000010</div>
+                <div class="inv-date">14/05/2026</div>
+                <div class="inv-amount">$2.100</div>
+                <button class="pdf-btn">PDF</button>
+              </div>
+              <div class="invoice-row">
+                <div class="inv-num">FC-C 0001-00000009</div>
+                <div class="inv-date">13/05/2026</div>
+                <div class="inv-amount">$5.800</div>
+                <button class="pdf-btn">PDF</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ══ PANTALLA 11: Resultados del mes ══ -->
+      <div class="screen active" id="sc-pl">
+        <div class="topbar">
+          <h1>Resultados del mes</h1>
+          <div class="topbar-actions">
+            <div class="filter-tabs">
+              <button class="filter-tab">‹ Abril</button>
+              <button class="filter-tab active">Mayo 2026</button>
+              <button class="filter-tab">Junio ›</button>
+            </div>
+          </div>
+        </div>
+        <div class="page-body">
+
+          <!-- Panel salud del negocio -->
+          <div class="salud-panel">
+            <div class="salud-item verde">
+              <div class="s-pregunta">¿Cubrís los gastos del local?</div>
+              <div class="s-resultado"><div class="s-dot verde"></div>Sí, este mes ganaste plata</div>
+              <div class="s-detalle">Ganancia neta: $47.000 — positiva</div>
+            </div>
+            <div class="salud-item amarillo">
+              <div class="s-pregunta">¿Tu margen es suficiente?</div>
+              <div class="s-resultado"><div class="s-dot amarillo"></div>Margen justo — hay que mejorar</div>
+              <div class="s-detalle">Margen actual: 30% · Por debajo del 25% sería riesgo</div>
+            </div>
+            <div class="salud-item verde">
+              <div class="s-pregunta">¿Vendés más que el mes pasado?</div>
+              <div class="s-resultado"><div class="s-dot verde"></div>Sí, vendés más que abril</div>
+              <div class="s-detalle">$1.240.000 vs $1.150.000 en abril (+8%)</div>
+            </div>
+          </div>
+
+          <!-- Punto de equilibrio -->
+          <div class="equilibrio-banner">
+            <div>
+              <div class="eq-label">Para cubrir todos los gastos del local necesitás vender</div>
+              <div class="eq-value">$1.083.000 este mes</div>
+            </div>
+            <span class="eq-tag">✓ Ya lo superaste — llevas $1.240.000</span>
+          </div>
+
+          <!-- KPIs -->
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px;">
+            <div class="kpi-card"><div class="kpi-label">Total que vendiste</div><div class="kpi-value">$1.240.000</div></div>
+            <div class="kpi-card"><div class="kpi-label">Lo que te queda después de la mercadería</div><div class="kpi-value">$372.000</div><div class="kpi-trend">30% de lo que vendiste</div></div>
+            <div class="kpi-card"><div class="kpi-label">Gastos del local</div><div class="kpi-value" style="color:#c0392b;">$325.000</div></div>
+            <div class="kpi-card"><div class="kpi-label">Lo que realmente ganaste</div><div class="kpi-value" style="color:#2e7d32;">$47.000</div><div class="kpi-trend">↑ +8% vs abril</div></div>
+          </div>
+
+          <!-- Métricas de ventas del período -->
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:20px;">
+            <div class="kpi-card"><div class="kpi-label">Cantidad de ventas</div><div class="kpi-value">412</div><div class="kpi-trend" style="color:#555;">registradas este mes</div></div>
+            <div class="kpi-card"><div class="kpi-label">Ticket promedio</div><div class="kpi-value">$3.010</div><div class="kpi-trend">↑ vs $2.880 en abril</div></div>
+            <div class="kpi-card"><div class="kpi-label">Efectivo vs Tarjeta</div><div class="kpi-value" style="font-size:1.1rem;">65% · 35%</div><div class="kpi-trend" style="color:#555;">$806.000 efect. · $434.000 tarj.</div></div>
+          </div>
+
+          <!-- Top productos del mes -->
+          <div class="periodo-card">
+            <div class="periodo-head">
+              <h3>Productos más vendidos del mes</h3>
+              <span style="font-size:0.75rem;color:#888;">Mayo 2026 · se actualiza con cada venta registrada</span>
+            </div>
+            <div class="periodo-row">
+              <div class="periodo-num">1</div>
+              <div class="periodo-nombre">Coca Cola 500ml</div>
+              <div class="periodo-bar-wrap"><div class="periodo-bar-fill" style="width:100%;"></div></div>
+              <div class="periodo-cant">612 u.</div>
+            </div>
+            <div class="periodo-row">
+              <div class="periodo-num">2</div>
+              <div class="periodo-nombre">Beldent × 1u</div>
+              <div class="periodo-bar-wrap"><div class="periodo-bar-fill" style="width:80%;"></div></div>
+              <div class="periodo-cant">490 u.</div>
+            </div>
+            <div class="periodo-row">
+              <div class="periodo-num">3</div>
+              <div class="periodo-nombre">Doritos Clásico</div>
+              <div class="periodo-bar-wrap"><div class="periodo-bar-fill" style="width:56%;"></div></div>
+              <div class="periodo-cant">341 u.</div>
+            </div>
+            <div class="periodo-row">
+              <div class="periodo-num">4</div>
+              <div class="periodo-nombre">Agua Villavicencio 500ml</div>
+              <div class="periodo-bar-wrap"><div class="periodo-bar-fill" style="width:42%;"></div></div>
+              <div class="periodo-cant">256 u.</div>
+            </div>
+            <div class="periodo-row">
+              <div class="periodo-num">5</div>
+              <div class="periodo-nombre">Oreo Original</div>
+              <div class="periodo-bar-wrap"><div class="periodo-bar-fill" style="width:31%;"></div></div>
+              <div class="periodo-cant">192 u.</div>
+            </div>
+          </div>
+
+          <div class="two-col">
+            <!-- Estado de resultados -->
+            <div class="card">
+              <div class="card-header"><h3>Resultado del mes — Mayo 2026</h3></div>
+              <div class="card-body">
+                <div class="pl-section">
+                  <div class="pl-section-title">Lo que vendiste</div>
+                  <div class="pl-row">
+                    <span>Total que vendiste</span><span>$1.240.000</span>
+                  </div>
+                  <div class="pl-row">
+                    <div>
+                      <div>Lo que pagaste por la mercadería que salió</div>
+                      <div style="font-size:0.72rem;color:#aaa;">Precio de costo × unidades vendidas de cada producto</div>
+                    </div>
+                    <span style="color:#c0392b;">−$868.000</span>
+                  </div>
+                  <div class="pl-row subtotal"><span>Lo que te queda después de la mercadería</span><span>$372.000 (30%)</span></div>
+                </div>
+
+                <div class="pl-section">
+                  <div class="pl-section-title">Gastos del local (alquiler, luz, empleados...)</div>
+                  <div class="pl-row"><span>Alquiler</span><span style="color:#c0392b;">−$120.000</span></div>
+                  <div class="pl-row"><span>Empleados</span><span style="color:#c0392b;">−$180.000</span></div>
+                  <div class="pl-row"><span>Luz / Gas</span><span style="color:#c0392b;">−$25.000</span></div>
+                  <div class="pl-row subtotal"><span>Total gastos del local</span><span style="color:#c0392b;">−$325.000</span></div>
+                </div>
+
+                <div class="pl-total">
+                  <span>LO QUE REALMENTE GANASTE ESTE MES</span>
+                  <div style="display:flex;align-items:center;gap:12px;">
+                    <span class="trend-tag">↑ +8% vs abril</span>
+                    <span style="font-size:1.3rem;">$47.000</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Comparativo -->
+            <div>
+              <div class="card">
+                <div class="card-header"><h3>Comparativo 3 meses</h3></div>
+                <table>
+                  <thead><tr><th>Mes</th><th>Ventas</th><th>Ganancia</th><th>Margen</th></tr></thead>
+                  <tbody>
+                    <tr><td><strong>Mayo</strong></td><td>$1.240.000</td><td style="color:#2e7d32;font-weight:700;">$47.000</td><td>3,8%</td></tr>
+                    <tr><td>Abril</td><td>$1.150.000</td><td style="color:#2e7d32;">$43.000</td><td>3,7%</td></tr>
+                    <tr><td>Marzo</td><td>$980.000</td><td style="color:#2e7d32;">$32.000</td><td>3,3%</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ══ PANTALLA 12: Caja ══ -->
+      <div class="screen" id="sc-caja">
+        <div class="topbar">
+          <h1>Caja</h1>
+          <div class="topbar-actions">
+            <span style="font-size:0.8rem;color:#888;">Viernes 16 de mayo, 2026</span>
+            <span style="background:#e8f8ee;color:#2e7d32;border-radius:20px;padding:4px 14px;font-size:0.75rem;font-weight:700;">● ABIERTA desde 08:15</span>
+          </div>
+        </div>
+        <div class="page-body">
+
+          <!-- KPIs del turno actual -->
+          <div class="kpi-grid" style="margin-bottom:20px;">
+            <div class="kpi-card">
+              <div class="kpi-label">Fondo inicial</div>
+              <div class="kpi-value">$10.000</div>
+              <div class="kpi-trend">Declarado al abrir</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">Ventas efectivo</div>
+              <div class="kpi-value">$61.200</div>
+              <div class="kpi-trend" style="color:#555;">38 transacciones</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">Egresos del turno</div>
+              <div class="kpi-value" style="color:#c0392b;">$32.000</div>
+              <div class="kpi-trend" style="color:#c0392b;">Compra Arcor</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">Lo que debería haber en la caja</div>
+              <div class="kpi-value" style="color:#2e7d32;">$39.200</div>
+              <div class="kpi-trend">Fondo + ventas efectivo − egresos</div>
+            </div>
+          </div>
+
+          <div class="two-col">
+
+            <!-- Resumen del turno + acción de cierre -->
+            <div>
+              <div class="card" style="margin-bottom:16px;">
+                <div class="card-header">
+                  <h3>Resumen del turno</h3>
+                  <span style="font-size:0.78rem;color:#888;">08:15 — ahora (6h 17min)</span>
+                </div>
+                <div class="card-body">
+                  <div class="pl-section">
+                    <div class="pl-section-title">Ingresos</div>
+                    <div class="pl-row"><span>Ventas en efectivo</span><span>+$61.200</span></div>
+                    <div class="pl-row"><span>Ventas con tarjeta</span><span style="color:#888;">$23.300 (no impacta caja)</span></div>
+                    <div class="pl-row"><span>Otros ingresos</span><span>+$0</span></div>
+                    <div class="pl-row subtotal"><span>Total ingresos en caja</span><span>$61.200</span></div>
+                  </div>
+                  <div class="pl-section" style="margin-top:12px;">
+                    <div class="pl-section-title">Egresos</div>
+                    <div class="pl-row"><span>Compra Arcor martes</span><span style="color:#c0392b;">−$32.000</span></div>
+                    <div class="pl-row subtotal"><span>Total egresos en caja</span><span style="color:#c0392b;">−$32.000</span></div>
+                  </div>
+                  <div class="pl-total" style="margin-top:12px;">
+                    <span>LO QUE DEBERÍA HABER EN LA CAJA</span>
+                    <span>$39.200</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Apertura de nueva caja (si estuviera cerrada, se mostraría esto) -->
+              <div class="card">
+                <div class="card-header"><h3>Historial de cierres</h3></div>
+                <table>
+                  <thead>
+                    <tr><th>Fecha</th><th>Apertura</th><th>Cierre</th><th>Esperado</th><th>Real</th><th>Diferencia</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>15/05</td>
+                      <td>08:00</td>
+                      <td>20:30</td>
+                      <td>$41.500</td>
+                      <td>$41.200</td>
+                      <td style="background:#fdecea;color:#c0392b;font-weight:700;border-radius:6px;padding:4px 8px;">−$300</td>
+                    </tr>
+                    <tr>
+                      <td>14/05</td>
+                      <td>08:10</td>
+                      <td>20:00</td>
+                      <td>$38.800</td>
+                      <td>$39.000</td>
+                      <td style="background:#e8f8ee;color:#2e7d32;font-weight:700;border-radius:6px;padding:4px 8px;">+$200</td>
+                    </tr>
+                    <tr>
+                      <td>13/05</td>
+                      <td>08:00</td>
+                      <td>19:45</td>
+                      <td>$44.200</td>
+                      <td>$44.200</td>
+                      <td style="background:#e8f8ee;color:#2e7d32;font-weight:700;border-radius:6px;padding:4px 8px;">$0 ✓</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- Panel de cierre -->
+            <div>
+              <div class="card" style="margin-bottom:16px;">
+                <div class="card-header"><h3>Cerrar caja</h3></div>
+                <div class="card-body" style="display:flex;flex-direction:column;gap:16px;">
+                  <div style="background:#fdecea;border-radius:10px;padding:12px 14px;font-size:0.83rem;color:#c0392b;">
+                    ⚠ Esta acción cerrará el turno actual y registrará el arqueo.
+                  </div>
+                  <div class="field-group">
+                    <div class="field-label">Efectivo contado en caja</div>
+                    <div class="field-input">$39.200</div>
+                  </div>
+                  <div style="background:#f8f9ff;border-radius:8px;padding:12px 14px;font-size:0.83rem;">
+                    <div class="pl-row" style="padding:4px 0;"><span>Esperado en caja</span><span style="font-weight:700;">$39.200</span></div>
+                    <div class="pl-row" style="padding:4px 0;"><span>Contado real</span><span style="font-weight:700;">$39.200</span></div>
+                    <div class="pl-row subtotal" style="padding:6px 0;margin-top:4px;border-bottom:none;"><span>Diferencia</span><span style="color:#2e7d32;">$0 — Sin diferencia</span></div>
+                  </div>
+                  <div class="field-group">
+                    <div class="field-label">Observaciones (opcional)</div>
+                    <div class="field-input placeholder">Ej: Falta cambio de $300 de ayer...</div>
+                  </div>
+                  <button class="btn-danger" style="width:100%;padding:12px;text-align:center;" onclick="goTo('caja-cierre',null)">🔒 Confirmar cierre de caja</button>
+                </div>
+              </div>
+
+              <!-- Panel de apertura (por si no hay caja abierta) -->
+              <div class="card" style="opacity:0.5;pointer-events:none;">
+                <div class="card-header"><h3>Abrir nueva caja</h3><span style="font-size:0.75rem;color:#888;">(disponible tras el cierre)</span></div>
+                <div class="card-body" style="display:flex;flex-direction:column;gap:14px;">
+                  <div class="field-group">
+                    <div class="field-label">Fondo inicial en efectivo</div>
+                    <div class="field-input">$10.000</div>
+                  </div>
+                  <div class="field-group">
+                    <div class="field-label">Responsable del turno</div>
+                    <div class="field-input">Roberto Gómez <span>▼</span></div>
+                  </div>
+                  <div class="field-group">
+                    <div class="field-label">Observaciones (opcional)</div>
+                    <div class="field-input placeholder">Ej: Turno mañana...</div>
+                  </div>
+                  <button class="btn-primary" style="width:100%;padding:12px;">✓ Abrir caja</button>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+
+      <!-- ══ PANTALLA 12b: Confirmación de cierre ══ -->
+      <div class="screen" id="sc-caja-cierre">
+        <div class="topbar">
+          <h1>Caja cerrada</h1>
+          <div class="topbar-actions">
+            <span style="background:#fdecea;color:#c0392b;border-radius:20px;padding:4px 14px;font-size:0.75rem;font-weight:700;">● CERRADA — 14:32</span>
+          </div>
+        </div>
+        <div class="page-body" style="max-width:700px;">
+          <div style="text-align:center;padding:32px 0 24px;">
+            <div style="font-size:3rem;margin-bottom:12px;">✅</div>
+            <div style="font-size:1.2rem;font-weight:800;color:#1a1a2e;margin-bottom:4px;">Caja cerrada correctamente</div>
+            <div style="font-size:0.88rem;color:#666;">Viernes 16 de mayo · Turno 08:15 — 14:32</div>
+          </div>
+
+          <div class="card" style="margin-bottom:20px;">
+            <div class="card-header"><h3>Resumen del cierre</h3></div>
+            <div class="card-body">
+              <div class="pl-row"><span>Fondo inicial</span><span>$10.000</span></div>
+              <div class="pl-row"><span>Total ventas efectivo</span><span>+$61.200</span></div>
+              <div class="pl-row"><span>Total egresos</span><span style="color:#c0392b;">−$32.000</span></div>
+              <div class="pl-row subtotal"><span>Efectivo esperado</span><span>$39.200</span></div>
+              <div class="pl-row subtotal"><span>Efectivo contado</span><span>$39.200</span></div>
+              <div class="pl-total" style="background:#2e7d32;">
+                <span>DIFERENCIA</span>
+                <span>$0 — Sin diferencia</span>
+              </div>
+            </div>
+          </div>
+
+          <div style="display:flex;gap:12px;">
+            <button class="btn-outline" style="flex:1;padding:12px;text-align:center;">📄 Exportar cierre</button>
+            <button class="btn-primary" style="flex:1;padding:12px;" onclick="goTo('caja',null)">🔓 Abrir nueva caja</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ══ PANTALLA 13: Clientes / Fidelización ══ -->
+      <div class="screen" id="sc-clients">
+        <div class="topbar">
+          <h1>Clientes / Fidelización</h1>
+          <div class="topbar-actions">
+            <input type="text" placeholder="🔍 Buscar cliente..." style="border:1.5px solid #dde;border-radius:8px;padding:7px 14px;font-size:0.83rem;width:220px;">
+            <button class="btn-primary">+ Registrar cliente</button>
+          </div>
+        </div>
+        <div class="page-body">
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px;">
+            <div class="kpi-card"><div class="kpi-label">Clientes registrados</div><div class="kpi-value">38</div><div class="kpi-trend">↑ 3 nuevos este mes</div></div>
+            <div class="kpi-card"><div class="kpi-label">Puntos activos</div><div class="kpi-value" style="color:#4caf82;">4.820</div></div>
+            <div class="kpi-card"><div class="kpi-label">Canjes este mes</div><div class="kpi-value">5</div><div class="kpi-trend">$2.500 en descuentos</div></div>
+            <div class="kpi-card"><div class="kpi-label">Regla actual</div><div class="kpi-value" style="font-size:0.95rem;">$100 = 1 pt</div><div class="kpi-trend">50 pts = $500</div></div>
+          </div>
+
+          <div class="two-col-7-3">
+            <div class="card">
+              <div class="card-header"><h3>Clientes registrados</h3><button class="btn-outline" style="font-size:0.75rem;padding:4px 10px;">✏ Editar reglas</button></div>
+              <table>
+                <thead>
+                  <tr><th>Nombre</th><th>ID</th><th>Teléfono</th><th>Faltan para canjear</th><th>Última compra</th><th></th></tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><strong>Juan García</strong></td>
+                    <td style="color:#888;">#00142</td>
+                    <td>249-XXX-XXXX</td>
+                    <td><strong style="color:#f39c12;">Faltan 18 pts</strong></td>
+                    <td>Hoy</td>
+                    <td><button class="btn-outline" style="padding:4px 10px;font-size:0.75rem;" onclick="goTo('client-detail',null)">Ver</button></td>
+                  </tr>
+                  <tr>
+                    <td><strong>María Rodríguez</strong></td>
+                    <td style="color:#888;">#00089</td>
+                    <td>249-XXX-XXXX</td>
+                    <td><strong style="color:#f39c12;">Faltan 70 pts</strong></td>
+                    <td>17/05</td>
+                    <td><button class="btn-outline" style="padding:4px 10px;font-size:0.75rem;" onclick="goTo('client-detail',null)">Ver</button></td>
+                  </tr>
+                  <tr>
+                    <td><strong>Carlos Fernández</strong></td>
+                    <td style="color:#888;">#00203</td>
+                    <td>249-XXX-XXXX</td>
+                    <td><strong style="color:#888;">Faltan 105 pts</strong></td>
+                    <td>15/05</td>
+                    <td><button class="btn-outline" style="padding:4px 10px;font-size:0.75rem;" onclick="goTo('client-detail',null)">Ver</button></td>
+                  </tr>
+                  <tr>
+                    <td><strong>Ana López</strong></td>
+                    <td style="color:#888;">#00315</td>
+                    <td>249-XXX-XXXX</td>
+                    <td><strong style="color:#888;">Faltan 213 pts</strong></td>
+                    <td>12/05</td>
+                    <td><button class="btn-outline" style="padding:4px 10px;font-size:0.75rem;" onclick="goTo('client-detail',null)">Ver</button></td>
+                  </tr>
+                  <tr>
+                    <td><strong>Roberto Sánchez</strong></td>
+                    <td style="color:#888;">#00071</td>
+                    <td>249-XXX-XXXX</td>
+                    <td><strong style="color:#888;">Faltan 338 pts</strong></td>
+                    <td>08/05</td>
+                    <td><button class="btn-outline" style="padding:4px 10px;font-size:0.75rem;" onclick="goTo('client-detail',null)">Ver</button></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div>
+              <div class="card" style="margin-bottom:16px;">
+                <div class="card-header"><h3>Reglas de puntos</h3></div>
+                <div class="card-body" style="display:flex;flex-direction:column;gap:14px;">
+                  <div class="field-group">
+                    <div class="field-label">Por cada</div>
+                    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                      <div class="field-input" style="width:80px;">$100</div>
+                      <span style="font-size:0.83rem;color:#555;">de compra =</span>
+                      <div class="field-input" style="width:60px;">1</div>
+                      <span style="font-size:0.83rem;color:#555;">punto</span>
+                    </div>
+                  </div>
+                  <div class="field-group">
+                    <div class="field-label">Canje</div>
+                    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                      <div class="field-input" style="width:60px;">50</div>
+                      <span style="font-size:0.83rem;color:#555;">puntos = descuento de</span>
+                      <div class="field-input" style="width:80px;">$500</div>
+                    </div>
+                  </div>
+                  <button class="btn-primary" style="width:fit-content;">Guardar reglas</button>
+                </div>
+              </div>
+              <div class="kpi-card">
+                <div class="kpi-label">Próximos canjes</div>
+                <div style="font-size:0.85rem;color:#333;margin-top:8px;line-height:1.9;">
+                  Juan García — faltan 18 pts<br>
+                  María R. — faltan 70 pts
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ══ PANTALLA 14: Perfil de cliente ══ -->
+      <div class="screen" id="sc-client-detail">
+        <div class="topbar">
+          <h1>Juan García — #00142</h1>
+          <div class="topbar-actions">
+            <button class="btn-outline" onclick="goTo('clients',null)">← Volver</button>
+            <button class="btn-outline">✏ Editar</button>
+            <button class="btn-primary" style="background:#4caf82;">⭐ Canjear puntos</button>
+          </div>
+        </div>
+        <div class="page-body">
+          <div class="two-col">
+            <div>
+              <div class="card" style="margin-bottom:16px;">
+                <div class="card-header"><h3>Datos del cliente</h3></div>
+                <div class="card-body" style="display:grid;grid-template-columns:1fr 1fr;gap:14px;font-size:0.85rem;">
+                  <div><div class="field-label" style="margin-bottom:4px;">Teléfono</div><div>249-XXX-XXXX</div></div>
+                  <div><div class="field-label" style="margin-bottom:4px;">ID único</div><div>#00142</div></div>
+                  <div><div class="field-label" style="margin-bottom:4px;">Cliente desde</div><div>02/03/2026</div></div>
+                  <div><div class="field-label" style="margin-bottom:4px;">Total compras</div><div>$46.800</div></div>
+                </div>
+              </div>
+              <div class="card">
+                <div class="card-header"><h3>Puntos acumulados</h3></div>
+                <div class="card-body" style="text-align:center;padding:20px;">
+                  <div style="font-size:3rem;font-weight:800;color:#4caf82;">332</div>
+                  <div style="font-size:0.83rem;color:#888;margin-top:4px;">Faltan 18 puntos para el próximo canje</div>
+                  <div style="background:#f8f9ff;border-radius:8px;padding:10px;margin-top:12px;font-size:0.82rem;color:#555;">
+                    Regla activa: $100 = 1 pt · 50 pts = $500 de descuento
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-header"><h3>Historial de compras</h3><span style="font-size:0.8rem;color:#888;">Total: $46.800</span></div>
+              <table>
+                <thead><tr><th>Fecha</th><th>Productos</th><th>Total</th><th>Puntos</th></tr></thead>
+                <tbody>
+                  <tr><td>19/05/2026</td><td>Coca Cola 500ml + Beldent</td><td><strong>$850</strong></td><td style="color:#4caf82;font-weight:700;">+8 pts</td></tr>
+                  <tr><td>16/05/2026</td><td>Doritos + Fanta + Mentitas</td><td><strong>$3.450</strong></td><td style="color:#4caf82;font-weight:700;">+34 pts</td></tr>
+                  <tr><td>12/05/2026</td><td>Oreo Original + Pepsi 500ml</td><td><strong>$2.150</strong></td><td style="color:#4caf82;font-weight:700;">+21 pts</td></tr>
+                  <tr><td>08/05/2026</td><td>Cigarrillos Marlboro</td><td><strong>$1.800</strong></td><td style="color:#4caf82;font-weight:700;">+18 pts</td></tr>
+                  <tr><td>05/05/2026</td><td>Coca Cola 1.5L + snacks varios</td><td><strong>$3.200</strong></td><td style="color:#4caf82;font-weight:700;">+32 pts</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- end main-content -->
+  </div><!-- end app-shell -->
+</div><!-- end browser-frame -->
+
+<script>
+  const screenToNav = {
+    'sale':            'sale',
+    'history':         'history',
+    'stock':           'stock',
+    'product':         'stock',
+    'prices':          'prices',
+    'cashflow':        'cashflow',
+    'suppliers':       'suppliers',
+    'supplier-detail': 'suppliers',
+    'afip':            'afip',
+    'pl':              'pl',
+    'caja':            'caja',
+    'caja-cierre':     'caja',
+    'clients':         'clients',
+    'client-detail':   'clients'
+  };
+
+  function selectPago(tipo) {
+    const btns = { cash: 'pay-cash', card: 'pay-card', both: 'pay-both' };
+    Object.values(btns).forEach(id => {
+      const el = document.getElementById(id);
+      if (el) { el.style.background = '#fff'; el.style.color = '#666'; el.style.borderColor = '#dde'; }
+    });
+    const sel = document.getElementById(btns[tipo]);
+    if (sel) { sel.style.background = '#1c2050'; sel.style.color = '#fff'; sel.style.borderColor = '#1c2050'; }
+    document.getElementById('cash-detail').style.display = tipo === 'cash' ? 'block' : 'none';
+    document.getElementById('both-detail').style.display = tipo === 'both' ? 'block' : 'none';
+  }
+
+  function goTo(screenId, btnEl) {
+    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+    const target = document.getElementById('sc-' + screenId);
+    if (target) {
+      target.classList.add('active');
+      document.querySelector('.main-content').scrollTop = 0;
+    }
+
+    // Selector superior
+    document.querySelectorAll('.screen-btn').forEach(b => b.classList.remove('active'));
+    if (btnEl) {
+      btnEl.classList.add('active');
+    } else {
+      document.querySelectorAll('.screen-btn').forEach(b => {
+        const oc = b.getAttribute('onclick') || '';
+        if (oc.includes("'" + screenId + "'")) b.classList.add('active');
+      });
+    }
+
+    // Nav lateral
+    document.querySelectorAll('.nav-link').forEach(n => n.classList.remove('active'));
+    const navId = screenToNav[screenId];
+    if (navId) {
+      const navEl = document.getElementById('nl-' + navId);
+      if (navEl) navEl.classList.add('active');
+    }
+  }
+</script>
+
+</body>
+</html>

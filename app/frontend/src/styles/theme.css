@@ -1,0 +1,26 @@
+/* Theme variables and color tokens for the app */
+:root{
+  --sidebar-bg:#1c2050;
+  --brand-green:#4caf82;
+  --brand-dark:#1a1a2e;
+  --muted:#8892c8;
+  --bg-page:#f5f6fa;
+  --card-bg:#ffffff;
+  --accent:#4caf82;
+}
+
+html,body{background:var(--bg-page);color:var(--brand-dark)}
+
+/* Legacy-compatible utility aliases used across screens */
+.bg-brand-navy{background-color:var(--sidebar-bg)}
+.bg-brand-navyLight{background-color:#2d3561}
+.bg-brand-greenBg{background-color:#e8f8ee}
+.text-brand-sidebar{color:var(--sidebar-bg)}
+.text-brand-navy{color:var(--sidebar-bg)}
+.btn-green{background-color:var(--brand-green);color:#fff;border:none;border-radius:8px}
+.btn-green:hover{filter:brightness(0.96)}
+
+.font-500{font-weight:500}
+.font-600{font-weight:600}
+.font-700{font-weight:700}
+.font-800{font-weight:800}

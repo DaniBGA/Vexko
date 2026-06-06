@@ -1,7 +1,7 @@
 // src/components/screens/ProductFormPage.jsx
 import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { api } from '../../lib/api.js';
 import { PageHeader, Input, fmt } from '../ui/index.jsx';
@@ -9,13 +9,18 @@ import { PageHeader, Input, fmt } from '../ui/index.jsx';
 export default function ProductFormPage() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const queryClient = useQueryClient();
+  const query = new URLSearchParams(location.search);
   const isNew = !id;
+  const customMode = query.get('custom') === '1';
+  const initialName = query.get('name') || '';
+  const returnTo = query.get('return') || '/stock';
 
   const [form, setForm] = useState({
-    name: '', barcode: '', subcategoryId: '', supplierId: '',
+    name: initialName, subcategoryId: '', supplierId: '',
     costPrice: '', salePrice: '', stock: '', minStock: '',
-    expiresAt: '', description: '',
+    expiresAt: '', description: '', isCustom: customMode,
   });
 
   const { data: product } = useQuery({
@@ -38,7 +43,6 @@ export default function ProductFormPage() {
     if (product) {
       setForm({
         name: product.name,
-        barcode: product.barcode || '',
         subcategoryId: product.subcategoryId,
         supplierId: product.supplierId || '',
         costPrice: product.costPrice,
@@ -47,6 +51,7 @@ export default function ProductFormPage() {
         minStock: product.minStock,
         expiresAt: product.expiresAt ? product.expiresAt.split('T')[0] : '',
         description: product.description || '',
+        isCustom: product.isCustom || false,
       });
     }
   }, [product]);
@@ -58,7 +63,7 @@ export default function ProductFormPage() {
     onSuccess: () => {
       toast.success(isNew ? 'Producto creado' : 'Producto actualizado');
       queryClient.invalidateQueries({ queryKey: ['products'] });
-      navigate('/stock');
+      navigate(customMode ? `${returnTo}?search=${encodeURIComponent(form.name)}` : '/stock');
     },
   });
 
@@ -106,10 +111,7 @@ export default function ProductFormPage() {
                 <label className="field-label">Nombre *</label>
                 <input value={form.name} onChange={(e) => set('name', e.target.value)} required className="field-input" />
               </div>
-              <div className="field-group">
-                <label className="field-label">Código de barras</label>
-                <input value={form.barcode} onChange={(e) => set('barcode', e.target.value)} className="field-input" placeholder="Escaneá o escribí" />
-              </div>
+              {/* Barcode removed: not implemented for now */}
               <div className="field-group">
                 <label className="field-label">Categoría / Subcategoría *</label>
                 <select value={form.subcategoryId} onChange={(e) => set('subcategoryId', e.target.value)} required className="field-input">
@@ -131,6 +133,17 @@ export default function ProductFormPage() {
               <div className="field-group">
                 <label className="field-label">Descripción (opcional)</label>
                 <textarea value={form.description} onChange={(e) => set('description', e.target.value)} rows={2} className="field-input resize-none" />
+              </div>
+              <div className="field-group">
+                <label className="field-label">Tipo de producto</label>
+                <label className="inline-flex items-center gap-2 text-sm text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={form.isCustom}
+                    onChange={(e) => set('isCustom', e.target.checked)}
+                  />
+                  Producto propio
+                </label>
               </div>
             </div>
           </div>

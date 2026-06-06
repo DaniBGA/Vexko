@@ -47,9 +47,15 @@ salesRouter.get('/', async (req, res, next) => {
 // POST /api/sales  — crea una venta, descuenta stock y suma puntos
 salesRouter.post('/', async (req, res, next) => {
   try {
-    const { items, paymentMethod, cashAmount, cardAmount, cashReceived, clientId } = req.body;
+    const { items, paymentMethod, cashAmount, transferAmount, cardAmount, cashReceived, clientId } = req.body;
 
     if (!items?.length) return res.status(400).json({ error: 'La venta debe tener al menos un producto' });
+
+    const normalizedPaymentMethod = String(paymentMethod || '').toUpperCase();
+    const allowedPaymentMethods = new Set(['CASH', 'TRANSFER', 'CARD', 'MIXED']);
+    if (!allowedPaymentMethods.has(normalizedPaymentMethod)) {
+      return res.status(400).json({ error: 'Medio de pago inválido' });
+    }
 
     // Validar stock y obtener productos
     const productIds = items.map((i) => i.productId);
@@ -79,30 +85,54 @@ salesRouter.post('/', async (req, res, next) => {
       }
     }
 
-    const changeGiven = paymentMethod === 'CASH' && cashReceived ? parseFloat(cashReceived) - total : null;
+    const cashValue = cashAmount !== undefined && cashAmount !== null && cashAmount !== '' ? parseFloat(cashAmount) : null;
+    const transferValue = transferAmount !== undefined && transferAmount !== null && transferAmount !== '' ? parseFloat(transferAmount) : null;
+    const cardValue = cardAmount !== undefined && cardAmount !== null && cardAmount !== '' ? parseFloat(cardAmount) : null;
+    const receivedValue = cashReceived !== undefined && cashReceived !== null && cashReceived !== '' ? parseFloat(cashReceived) : null;
+
+    if (normalizedPaymentMethod === 'MIXED') {
+      const partialTotal = [cashValue, transferValue, cardValue].reduce((sum, value) => sum + (Number.isFinite(value) ? value : 0), 0);
+      if (Math.abs(partialTotal - total) > 0.01) {
+        return res.status(400).json({ error: 'En pago mixto, la suma de los medios debe coincidir con el total' });
+      }
+    }
+
+    if (normalizedPaymentMethod === 'CASH' && receivedValue !== null && receivedValue < total) {
+      return res.status(400).json({ error: 'El efectivo recibido no cubre el total' });
+    }
+
+    const changeGiven = normalizedPaymentMethod === 'CASH' && receivedValue !== null ? receivedValue - total : null;
+    const kiosk = await prisma.kiosk.findFirst({ orderBy: { createdAt: 'asc' } });
+    if (!kiosk) {
+      return res.status(400).json({ error: 'No hay kiosko configurado para registrar la venta' });
+    }
 
     // Transacción atómica
     const sale = await prisma.$transaction(async (tx) => {
       // Crear venta
       const newSale = await tx.sale.create({
         data: {
+          kioskId: kiosk.id,
           userId: req.user.id,
-          clientId: clientId ? parseInt(clientId) : null,
+          clientId: clientId || null,
           total,
-          paymentMethod,
-          cashAmount: cashAmount ? parseFloat(cashAmount) : null,
-          cardAmount: cardAmount ? parseFloat(cardAmount) : null,
-          cashReceived: cashReceived ? parseFloat(cashReceived) : null,
+          paymentMethod: normalizedPaymentMethod,
+          cashAmount: cashValue,
+          transferAmount: transferValue,
+          cardAmount: cardValue,
+          cashReceived: receivedValue,
           changeGiven,
           pointsEarned,
           items: {
             create: items.map((item) => {
               const product = products.find((p) => p.id === item.productId);
+              const unitPrice = parseFloat(product.salePrice);
+              const subtotal = unitPrice * item.quantity;
               return {
                 productId: item.productId,
                 quantity: item.quantity,
-                unitPrice: product.salePrice,
-                costPrice: product.costPrice,
+                unitPrice,
+                subtotal,
               };
             }),
           },
@@ -124,7 +154,7 @@ salesRouter.post('/', async (req, res, next) => {
       // Actualizar puntos y gasto del cliente
       if (clientId && pointsEarned > 0) {
         await tx.client.update({
-          where: { id: parseInt(clientId) },
+          where: { id: clientId },
           data: {
             points: { increment: pointsEarned },
             totalSpent: { increment: total },
@@ -145,7 +175,7 @@ salesRouter.post('/', async (req, res, next) => {
 salesRouter.get('/:id', async (req, res, next) => {
   try {
     const sale = await prisma.sale.findUniqueOrThrow({
-      where: { id: parseInt(req.params.id) },
+      where: { id: req.params.id },
       include: {
         items: { include: { product: true } },
         client: true,

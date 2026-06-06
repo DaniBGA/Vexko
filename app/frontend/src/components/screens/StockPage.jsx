@@ -39,18 +39,20 @@ export default function StockPage() {
   });
 
   // Top 3 más vendidos (en demo usamos los primeros 3 con más stock como proxy)
-  const top3 = [...products].sort((a, b) => b.stock - a.stock).slice(0, 3);
+  const globalProducts = products.filter((product) => !product.isCustom);
+  const customProducts = products.filter((product) => product.isCustom);
+  const top3 = [...globalProducts].sort((a, b) => b.stock - a.stock).slice(0, 3);
 
   return (
     <div className="flex flex-col flex-1 overflow-hidden">
       <PageHeader title="Stock de productos">
         <div className="relative">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Buscar producto..."
-            className="field-input pl-8 py-2 text-sm w-52"
+            className="field-input input-with-icon py-2 text-sm w-52"
           />
         </div>
         <select
@@ -126,6 +128,48 @@ export default function StockPage() {
                       <td className="td text-gray-400">{p.minStock}</td>
                       <td className="td">{expiryLabel(p.expiresAt)}</td>
                       <td className="td">{stockBadge(p)}</td>
+                      <td className="td">
+                        <button
+                          onClick={() => navigate(`/stock/producto/${p.id}`)}
+                          className="btn-outline py-1 px-3 text-xs"
+                        >
+                          Editar
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        <div className="card">
+          <div className="card-header">
+            <h3 className="card-title">Productos propios</h3>
+            <span className="text-xs text-gray-400">{customProducts.length} productos</span>
+          </div>
+          {customProducts.length === 0 ? (
+            <EmptyState icon={Package} title="Sin productos propios" description="Los productos creados desde ventas aparecerán acá." />
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr>
+                    {['Producto', 'Categoría', 'P. Costo', 'P. Venta', 'Stock', 'Mínimo', ''].map((h) => (
+                      <th key={h} className="th">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {customProducts.map((p) => (
+                    <tr key={p.id} className="hover:bg-gray-50 transition-colors">
+                      <td className="td font-600 text-brand-sidebar">{p.name}</td>
+                      <td className="td text-gray-500">{p.subcategory?.category?.name || '—'}</td>
+                      <td className="td">{fmt(p.costPrice)}</td>
+                      <td className="td font-600">{fmt(p.salePrice)}</td>
+                      <td className="td font-700">{p.stock}</td>
+                      <td className="td text-gray-400">{p.minStock}</td>
                       <td className="td">
                         <button
                           onClick={() => navigate(`/stock/producto/${p.id}`)}

@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../store/authStore.js';
 import { Store, Loader2 } from 'lucide-react';
+import Logo from '../ui/Logo.jsx';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('admin@kiosco.com');
@@ -17,17 +18,16 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen bg-brand-sidebar flex items-center justify-center p-4">
+    <div className="min-h-screen bg-brand-sidebar flex items-center justify-center p-6">
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-14 h-14 bg-brand-green rounded-2xl mb-4">
-            <Store size={28} className="text-white" />
+          <div className="logo-circle mb-4">
+            <Logo className="h-10" />
           </div>
-          <h1 className="text-2xl font-800 text-white">KioscoApp</h1>
           <p className="text-slate-400 text-sm mt-1">Sistema de gestión</p>
         </div>
 
-        <form onSubmit={handleSubmit} className="bg-white rounded-2xl p-7 shadow-2xl">
+        <form onSubmit={handleSubmit} className="page-card">
           <div className="space-y-4">
             <div className="field-group">
               <label className="field-label">Email</label>

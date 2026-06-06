@@ -1,0 +1,270 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ----------------------
+// Multi-business schema
+// ----------------------
+
+model Customer {
+  id        String    @id @default(cuid())
+  name      String    @unique
+  email     String?   @unique
+  phone     String?
+  address   String?
+  kiosks    Kiosk[]
+  products  Product[]
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+}
+
+model Kiosk {
+  id          String        @id @default(cuid())
+  name        String
+  address     String?
+  phone       String?
+  customerId  String
+  customer    Customer      @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  kioskProducts KioskProduct[]
+  sales       Sale[]
+  suppliers   Supplier[]
+  cashFlows   CashFlow[]
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@unique([customerId, name])
+  @@index([customerId])
+}
+
+model Category {
+  id          String       @id @default(cuid())
+  name        String       @unique
+  description String?
+  subcategories Subcategory[]
+  products    Product[]
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([name])
+}
+
+model Subcategory {
+  id         String     @id @default(cuid())
+  name       String
+  categoryId String
+  category   Category   @relation(fields: [categoryId], references: [id])
+  products   Product[]
+
+  @@unique([name, categoryId])
+  @@index([categoryId])
+}
+
+model Product {
+  id           String       @id @default(cuid())
+  name         String
+  description  String?
+  barcode      String?      @unique
+  sku          String?      @unique
+  basePrice    Float?
+  baseCost     Float?
+  categoryId   String?
+  subcategoryId String?
+  category     Category?    @relation(fields: [categoryId], references: [id])
+  subcategory  Subcategory? @relation(fields: [subcategoryId], references: [id])
+  isCustom     Boolean      @default(false)
+  customerId   String?
+  customer     Customer?    @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  // compatibility fields (legacy app expects stock/minStock on Product)
+  stock        Int?         @default(0)
+  minStock     Int?         @default(0)
+  salePrice    Float?
+  costPrice    Float?
+  expiresAt    DateTime?
+  supplierId   String?
+  supplier     Supplier?    @relation(fields: [supplierId], references: [id])
+  active       Boolean      @default(true)
+
+  kioskProducts KioskProduct[]
+  saleItems     SaleItem[]
+  supplierProducts SupplierProduct[]
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  @@index([categoryId])
+  @@index([customerId])
+  @@index([isCustom])
+}
+
+model KioskProduct {
+  id         String   @id @default(cuid())
+  kioskId    String
+  productId  String
+  stock      Int      @default(0)
+  minStock   Int      @default(0)
+  price      Float?
+  kiosk      Kiosk    @relation(fields: [kioskId], references: [id], onDelete: Cascade)
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([kioskId, productId])
+  @@index([kioskId])
+  @@index([productId])
+}
+
+model Sale {
+  id            String     @id @default(cuid())
+  date          DateTime   @default(now())
+  total         Float
+  paymentMethod String
+  cashAmount    Float?
+  transferAmount Float?
+  cardAmount    Float?
+  cashReceived  Float?
+  changeGiven   Float?
+  pointsEarned  Int      @default(0)
+  kioskId       String
+  kiosk         Kiosk      @relation(fields: [kioskId], references: [id])
+  userId        String
+  user          User       @relation(fields: [userId], references: [id])
+  clientId      String?
+  client        Client?    @relation("ClientSales", fields: [clientId], references: [id])
+  items         SaleItem[]
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  @@index([kioskId])
+  @@index([userId])
+  @@index([date])
+}
+
+model SaleItem {
+  id         String   @id @default(cuid())
+  quantity   Int
+  unitPrice  Float
+  subtotal   Float
+  saleId     String
+  productId  String
+  sale       Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  product    Product  @relation(fields: [productId], references: [id])
+  createdAt  DateTime @default(now())
+
+  @@index([saleId])
+  @@index([productId])
+}
+
+model Supplier {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  phone     String?
+  email     String?
+  address   String?
+  kioskId   String?
+  kiosk     Kiosk?   @relation(fields: [kioskId], references: [id])
+  products  SupplierProduct[]
+  purchases Purchase[]
+  items     Product[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([kioskId])
+}
+
+model SupplierProduct {
+  id         String   @id @default(cuid())
+  cost       Float?
+  leadDays   Int?
+  supplierId String
+  productId  String
+  supplier   Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([supplierId, productId])
+  @@index([supplierId])
+  @@index([productId])
+}
+
+model CashFlow {
+  id        String   @id @default(cuid())
+  type      String
+  amount    Float
+  description String?
+  kioskId   String
+  kiosk     Kiosk    @relation(fields: [kioskId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([kioskId])
+  @@index([type])
+  @@index([createdAt])
+}
+
+// ----------------------
+// App-specific models (auth, clients, invoices, loyalty)
+// ----------------------
+
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         String
+  active       Boolean  @default(true)
+  sales        Sale[]
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Client {
+  id         String   @id @default(cuid())
+  name       String
+  phone      String   @unique
+  points     Int      @default(0)
+  totalSpent Float    @default(0)
+  sales      Sale[]   @relation("ClientSales")
+  redemptions PointRedemption[]
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model LoyaltyRule {
+  id               Int     @id @default(1)
+  amountPerPoint   Float
+  pointsForDiscount Int
+  discountAmount   Float
+  active           Boolean @default(true)
+}
+
+model PointRedemption {
+  id        String   @id @default(cuid())
+  clientId  String
+  pointsUsed Int
+  discount  Float
+  createdAt DateTime @default(now())
+  client    Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+}
+
+model Invoice {
+  id            String   @id @default(cuid())
+  saleId        String?
+  invoiceType   String
+  invoiceNumber String
+  total         Float
+  status        String
+  createdAt     DateTime @default(now())
+}
+
+model Purchase {
+  id         String   @id @default(cuid())
+  supplierId String
+  createdAt  DateTime @default(now())
+  supplier   Supplier @relation(fields: [supplierId], references: [id])
+}
