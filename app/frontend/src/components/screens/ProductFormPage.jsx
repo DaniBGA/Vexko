@@ -176,9 +176,19 @@ export default function ProductFormPage() {
   );
 
   const { mutate: save, isPending } = useMutation({
-    mutationFn: (data) => (isNew
-      ? api.post('/products', data).then((r) => r.data)
-      : api.put(`/products/${id}`, data).then((r) => r.data)),
+    mutationFn: (data) => {
+      if (isNew && catalogId) {
+        return api.post(`/products/${catalogId}/clone-to-kiosk`, {
+          stock: data.stock,
+          minStock: data.minStock,
+          price: data.salePrice,
+        }).then((r) => r.data);
+      }
+
+      return isNew
+        ? api.post('/products', data).then((r) => r.data)
+        : api.put(`/products/${id}`, data).then((r) => r.data);
+    },
     onSuccess: () => {
       toast.success(isNew ? 'Producto creado' : 'Producto actualizado');
       queryClient.invalidateQueries({ queryKey: ['products'] });
@@ -188,7 +198,7 @@ export default function ProductFormPage() {
         navigate(`${returnTo}?search=${encodeURIComponent(form.name)}`);
         return;
       }
-      navigate(form.isCustom ? '/stock' : `/catalogo?search=${encodeURIComponent(form.name)}`);
+      navigate('/stock');
     },
   });
 
@@ -349,8 +359,9 @@ export default function ProductFormPage() {
                       checked={form.isCustom}
                       onChange={(e) => set('isCustom', e.target.checked)}
                     />
-                    Producto propio
+                    Origen propio
                   </label>
+                  <div className="mt-1 text-xs text-gray-400">Si lo desmarcás, solo cambia el origen. No se quita del stock del kiosco.</div>
                 </div>
                 
               </div>
@@ -604,7 +615,7 @@ export default function ProductFormPage() {
             {selectedCatalogProduct && (
               <div className="rounded-2xl border border-brand-navy/20 bg-brand-navy/5 p-4 flex items-center justify-between gap-4">
                 <div>
-                  <div className="text-sm font-700 text-brand-sidebar">Usando como base</div>
+                  <div className="text-sm font-700 text-brand-sidebar">Usando como origen global</div>
                   <div className="text-xs text-gray-500">{selectedCatalogProduct.name}</div>
                 </div>
                 <button onClick={() => setSelectedCatalogProduct(null)} className="btn-outline">Cambiar</button>

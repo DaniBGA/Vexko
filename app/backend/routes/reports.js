@@ -50,7 +50,7 @@ reportsRouter.get('/monthly', async (req, res, next) => {
       }),
       prisma.saleItem.findMany({
         where: { sale: { createdAt: { gte: from, lte: to }, ...kioskWhere } },
-        include: { product: { select: { id: true, name: true, costPrice: true, subcategory: { select: { name: true } } } } },
+        include: { product: { select: { id: true, name: true, costPrice: true } } },
       }),
       prisma.cashFlow.findMany({
         where: { type: 'EXPENSE', createdAt: { gte: from, lte: to }, ...kioskWhere },
@@ -113,29 +113,44 @@ reportsRouter.get('/monthly', async (req, res, next) => {
       expenseBreakdown: cashFlows,
       // Last 3 months comparison (current, prev, prev2)
       threeMonthComparison: await (async () => {
-        const months = [];
-        for (let i = 0; i < 3; i++) {
+        const monthSpecs = Array.from({ length: 3 }, (_, i) => {
           const m = month - i;
           const y = year + Math.floor(m / 12);
           const mm = ((m % 12) + 12) % 12; // normalized month index
-          const fromM = new Date(y, mm, 1);
-          const toM = new Date(y, mm + 1, 0, 23, 59, 59);
+          return {
+            month: mm + 1,
+            year: y,
+            from: new Date(y, mm, 1),
+            to: new Date(y, mm + 1, 0, 23, 59, 59),
+          };
+        });
 
-          const [agg, items, flows] = await Promise.all([
-            prisma.sale.aggregate({ _sum: { total: true }, _count: { id: true }, where: { createdAt: { gte: fromM, lte: toM }, ...kioskWhere } }),
-            prisma.saleItem.findMany({ where: { sale: { createdAt: { gte: fromM, lte: toM }, ...kioskWhere } }, include: { product: { select: { costPrice: true } } } }),
-            prisma.cashFlow.findMany({ where: { type: 'EXPENSE', createdAt: { gte: fromM, lte: toM }, ...kioskWhere } }),
-          ]);
+        const monthResults = await Promise.all(
+          monthSpecs.map(async (spec) => {
+            const [agg, items, flows] = await Promise.all([
+              prisma.sale.aggregate({ _sum: { total: true }, where: { createdAt: { gte: spec.from, lte: spec.to }, ...kioskWhere } }),
+              prisma.saleItem.findMany({ where: { sale: { createdAt: { gte: spec.from, lte: spec.to }, ...kioskWhere } }, include: { product: { select: { costPrice: true } } } }),
+              prisma.cashFlow.findMany({ where: { type: 'EXPENSE', createdAt: { gte: spec.from, lte: spec.to }, ...kioskWhere }, select: { amount: true } }),
+            ]);
 
-          const rev = parseFloat(agg._sum.total || 0);
-          const cogsMonth = items.reduce((s, it) => s + (parseFloat(it.product?.costPrice || 0) * it.quantity), 0);
-          const expensesMonth = flows.reduce((s, f) => s + parseFloat(f.amount), 0);
-          const gross = rev - cogsMonth;
-          const margin = rev > 0 ? Math.round(((gross / rev) * 100) * 10) / 10 : 0;
+            const revenueMonth = parseFloat(agg._sum.total || 0);
+            const cogsMonth = items.reduce((sum, item) => sum + (parseFloat(item.product?.costPrice || 0) * item.quantity), 0);
+            const expensesMonth = flows.reduce((sum, flow) => sum + parseFloat(flow.amount), 0);
+            const grossProfitMonth = revenueMonth - cogsMonth;
+            const marginMonth = revenueMonth > 0 ? Math.round(((grossProfitMonth / revenueMonth) * 100) * 10) / 10 : 0;
 
-          months.push({ month: mm + 1, year: y, revenue: rev, grossProfit: gross, margin, expenses: expensesMonth });
-        }
-        return months;
+            return {
+              month: spec.month,
+              year: spec.year,
+              revenue: revenueMonth,
+              grossProfit: grossProfitMonth,
+              margin: marginMonth,
+              expenses: expensesMonth,
+            };
+          })
+        );
+
+        return monthResults;
       })(),
     });
   } catch (err) { next(err); }

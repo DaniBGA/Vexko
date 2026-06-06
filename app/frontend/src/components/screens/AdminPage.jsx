@@ -323,7 +323,7 @@ export default function AdminPage() {
                 <div className="field-group">
                   <label className="field-label">Plan</label>
                   <select value={customerPlan} onChange={(e) => setCustomerPlan(e.target.value)} className="field-input">
-                    <option value="BASE">Base</option>
+                    <option value="BASE">Global</option>
                     <option value="INTERMEDIO">Intermedio</option>
                     <option value="PREMIUM">Premium</option>
                   </select>

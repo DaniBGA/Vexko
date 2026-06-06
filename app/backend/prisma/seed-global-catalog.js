@@ -11,6 +11,20 @@ function normalizeText(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function buildProductSignature(product) {
+  return [
+    normalizeText(product?.name).toLowerCase(),
+    product?.categoryId || '',
+    product?.subcategoryId || '',
+    product?.barcode || '',
+    product?.sku || '',
+    product?.supplierId || '',
+    product?.loadMode || '',
+    product?.customerId || '',
+    product?.isCustom ? '1' : '0',
+  ].join('::');
+}
+
 async function upsertCategory(name) {
   return prisma.category.upsert({
     where: { name },
@@ -38,6 +52,20 @@ async function main() {
   const categoryCache = new Map();
   const subcategoryCache = new Map();
   const productRows = [];
+  const existingProducts = await prisma.product.findMany({
+    select: {
+      name: true,
+      categoryId: true,
+      subcategoryId: true,
+      barcode: true,
+      sku: true,
+      supplierId: true,
+      loadMode: true,
+      customerId: true,
+      isCustom: true,
+    },
+  });
+  const existingSignatures = new Set(existingProducts.map(buildProductSignature));
 
   for (const entry of catalog) {
     const categoryName = normalizeText(entry?.categoria);
@@ -72,11 +100,32 @@ async function main() {
       stock: 0,
       minStock: 0,
     });
+
+    existingSignatures.add(buildProductSignature({
+      name: productName,
+      active: true,
+      isCustom: false,
+      customerId: null,
+      categoryId: category.id,
+      subcategoryId: subcategory.id,
+      loadMode: 'pack',
+    }));
   }
 
-  await prisma.product.createMany({ data: productRows });
+  const uniqueRows = productRows.filter((product) => {
+    const signature = buildProductSignature(product);
+    if (existingSignatures.has(signature)) {
+      return false;
+    }
+    existingSignatures.add(signature);
+    return true;
+  });
 
-  console.log(`✓ Catálogo global importado: ${productRows.length} productos`);
+  if (uniqueRows.length > 0) {
+    await prisma.product.createMany({ data: uniqueRows });
+  }
+
+  console.log(`✓ Catálogo global importado: ${uniqueRows.length} productos nuevos`);
 }
 
 main()

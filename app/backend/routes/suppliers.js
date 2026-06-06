@@ -8,6 +8,8 @@ suppliersRouter.use(requireAuth);
 
 const MAX_HISTORY_MONTHS = 2;
 
+// ==================== Utility Functions ====================
+
 function toNumber(value) {
   if (value === undefined || value === null || value === '') return undefined;
   const parsed = Number(value);
@@ -43,6 +45,21 @@ function getHistoryCutoff() {
   return cutoff;
 }
 
+function normalizePaymentMethod(value) {
+  const method = String(value || 'CASH').trim().toUpperCase();
+  if (['CASH', 'TRANSFER', 'CARD'].includes(method)) return method;
+  return 'CASH';
+}
+
+function parseDateValue(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+// ==================== Prisma Builders ====================
+
 function buildPurchaseItemSelect() {
   return {
     select: {
@@ -73,35 +90,9 @@ function buildPurchaseItemSelect() {
   };
 }
 
-function normalizePaymentMethod(value) {
-  const method = String(value || 'CASH').trim().toUpperCase();
-  if (['CASH', 'TRANSFER', 'CARD'].includes(method)) return method;
-  return 'CASH';
-}
-
-function parseDateValue(value) {
-  const raw = String(value || '').trim();
-  if (!raw) return null;
-  const parsed = new Date(raw);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
-
 function buildPurchaseInclude() {
   return {
     items: buildPurchaseItemSelect(),
-  };
-}
-
-function buildSupplierPaginationResponse(supplier, purchases, total, page, limit) {
-  return {
-    ...supplier,
-    purchases,
-    totalPurchases: total,
-    page,
-    limit,
-    totalPages: total === 0 ? 0 : Math.ceil(total / limit),
-    lastOrderAt: purchases[0]?.createdAt || null,
-    lastOrderToday: isToday(purchases[0]?.createdAt),
   };
 }
 
@@ -109,12 +100,29 @@ function buildSupplierInclude() {
   return {
     _count: { select: { products: true, purchases: true } },
     purchases: {
-      orderBy: { createdAt: 'desc' },
+      orderBy: { deliveryDate: 'desc' },
       take: 1,
       include: { items: buildPurchaseItemSelect() },
     },
   };
 }
+
+function buildSupplierPaginationResponse(supplier, purchases, total, page, limit) {
+  const lastPurchase = purchases[0] || null;
+  const lastOrderDate = lastPurchase?.deliveryDate || null;
+  return {
+    ...supplier,
+    purchases,
+    totalPurchases: total,
+    page,
+    limit,
+    totalPages: total === 0 ? 0 : Math.ceil(total / limit),
+    lastOrderAt: lastOrderDate,
+    lastOrderToday: isToday(lastOrderDate),
+  };
+}
+
+// ==================== Database Maintenance ====================
 
 export async function cleanupOldPurchases(force = false) {
   const cutoff = getHistoryCutoff();
@@ -132,6 +140,8 @@ export async function cleanupOldPurchases(force = false) {
 
   return removedPurchases;
 }
+
+// ==================== GET Suppliers ====================
 
 suppliersRouter.get('/', async (req, res, next) => {
   try {
@@ -151,8 +161,8 @@ suppliersRouter.get('/', async (req, res, next) => {
     res.json(
       suppliers.map((supplier) => ({
         ...supplier,
-        lastOrderAt: supplier.purchases[0]?.createdAt || null,
-        lastOrderToday: isToday(supplier.purchases[0]?.createdAt),
+        lastOrderAt: supplier.purchases[0]?.deliveryDate || null,
+        lastOrderToday: isToday(supplier.purchases[0]?.deliveryDate),
       }))
     );
   } catch (err) {
@@ -164,8 +174,12 @@ suppliersRouter.get('/:id', async (req, res, next) => {
   try {
     const kiosk = await resolveRequestKiosk(req);
     if (!kiosk) throw Object.assign(new Error('No hay kiosko configurado'), { statusCode: 400 });
-    const supplier = await prisma.supplier.findFirst({ where: { id: req.params.id, kioskId: kiosk.id } });
+
+    const supplier = await prisma.supplier.findFirst({
+      where: { id: req.params.id, kioskId: kiosk.id },
+    });
     if (!supplier) throw Object.assign(new Error('Proveedor no encontrado'), { statusCode: 404 });
+
     const page = parsePage(req.query.page);
     const limit = parseLimit(req.query.limit);
     const skip = (page - 1) * limit;
@@ -173,14 +187,14 @@ suppliersRouter.get('/:id', async (req, res, next) => {
 
     const where = {
       supplierId: supplier.id,
-      createdAt: { gte: cutoff },
+      deliveryDate: { gte: cutoff },
     };
 
     const [totalPurchases, purchases, detail] = await Promise.all([
       prisma.purchase.count({ where }),
       prisma.purchase.findMany({
         where,
-        orderBy: { createdAt: 'desc' },
+        orderBy: { deliveryDate: 'desc' },
         skip,
         take: limit,
         include: buildPurchaseInclude(),
@@ -193,11 +207,15 @@ suppliersRouter.get('/:id', async (req, res, next) => {
       }),
     ]);
 
-    res.json(buildSupplierPaginationResponse(detail, purchases, totalPurchases, page, limit));
+    res.json(
+      buildSupplierPaginationResponse(detail, purchases, totalPurchases, page, limit)
+    );
   } catch (err) {
     next(err);
   }
 });
+
+// ==================== POST Create Supplier ====================
 
 suppliersRouter.post('/', async (req, res, next) => {
   try {
@@ -223,12 +241,18 @@ suppliersRouter.post('/', async (req, res, next) => {
   }
 });
 
+// ==================== PUT Update Supplier ====================
+
 suppliersRouter.put('/:id', async (req, res, next) => {
   try {
     const kiosk = await resolveRequestKiosk(req);
     if (!kiosk) throw Object.assign(new Error('No hay kiosko configurado'), { statusCode: 400 });
-    const supplier = await prisma.supplier.findFirst({ where: { id: req.params.id, kioskId: kiosk.id } });
+
+    const supplier = await prisma.supplier.findFirst({
+      where: { id: req.params.id, kioskId: kiosk.id },
+    });
     if (!supplier) throw Object.assign(new Error('Proveedor no encontrado'), { statusCode: 404 });
+
     const updated = await prisma.supplier.update({
       where: { id: supplier.id },
       data: {
@@ -236,21 +260,27 @@ suppliersRouter.put('/:id', async (req, res, next) => {
         phone: req.body.phone !== undefined ? req.body.phone || null : undefined,
         email: req.body.email !== undefined ? req.body.email || null : undefined,
         address: req.body.address !== undefined ? req.body.address || null : undefined,
-        kioskId: kiosk.id,
       },
     });
+
     res.json(updated);
   } catch (err) {
     next(err);
   }
 });
 
+// ==================== DELETE Supplier ====================
+
 suppliersRouter.delete('/:id', async (req, res, next) => {
   try {
     const kiosk = await resolveRequestKiosk(req);
     if (!kiosk) throw Object.assign(new Error('No hay kiosko configurado'), { statusCode: 400 });
-    const supplier = await prisma.supplier.findFirst({ where: { id: req.params.id, kioskId: kiosk.id } });
+
+    const supplier = await prisma.supplier.findFirst({
+      where: { id: req.params.id, kioskId: kiosk.id },
+    });
     if (!supplier) throw Object.assign(new Error('Proveedor no encontrado'), { statusCode: 404 });
+
     await prisma.supplier.delete({ where: { id: supplier.id } });
     res.status(204).end();
   } catch (err) {
@@ -258,12 +288,18 @@ suppliersRouter.delete('/:id', async (req, res, next) => {
   }
 });
 
+// ==================== POST Create Purchase Order ====================
+
 suppliersRouter.post('/:id/orders', async (req, res, next) => {
   try {
     const kiosk = await resolveRequestKiosk(req);
     if (!kiosk) throw Object.assign(new Error('No hay kiosko configurado'), { statusCode: 400 });
-    const supplier = await prisma.supplier.findFirst({ where: { id: req.params.id, kioskId: kiosk.id } });
+
+    const supplier = await prisma.supplier.findFirst({
+      where: { id: req.params.id, kioskId: kiosk.id },
+    });
     if (!supplier) throw Object.assign(new Error('Proveedor no encontrado'), { statusCode: 404 });
+
     const paymentMethod = normalizePaymentMethod(req.body.paymentMethod);
     const rawItems = Array.isArray(req.body.items) ? req.body.items : [];
     const items = rawItems
@@ -282,7 +318,10 @@ suppliersRouter.post('/:id/orders', async (req, res, next) => {
       where: {
         id: { in: items.map((item) => item.productId) },
         active: true,
-        customerId: kiosk.customerId,
+        OR: [
+          { customerId: kiosk.customerId },
+          { customerId: null },
+        ],
       },
       include: {
         subcategory: { include: { category: true } },
@@ -295,10 +334,22 @@ suppliersRouter.post('/:id/orders', async (req, res, next) => {
 
     const purchaseItems = items.map((item) => {
       const product = products.find((current) => current.id === item.productId);
-      const packCost = product.loadMode === 'pack' && product.packPrice && product.packUnits
+      const explicitPackPrice = item.packPrice !== undefined && item.packPrice !== null ? Number(item.packPrice) : null;
+      const explicitUnitCost = item.unitCost !== undefined && item.unitCost !== null ? Number(item.unitCost) : null;
+
+      const packCostFromProduct = product.loadMode === 'pack' && product.packPrice && product.packUnits
         ? Number(product.packPrice) / Number(product.packUnits)
         : null;
-      const unitCost = item.unitCost ?? product.costPrice ?? packCost ?? product.salePrice ?? 0;
+
+      let unitCost = 0;
+      if (explicitUnitCost !== null) {
+        unitCost = explicitUnitCost;
+      } else if (explicitPackPrice !== null && product.loadMode === 'pack' && product.packUnits) {
+        unitCost = explicitPackPrice / Number(product.packUnits);
+      } else {
+        unitCost = product.costPrice ?? packCostFromProduct ?? product.salePrice ?? 0;
+      }
+
       return {
         productId: product.id,
         quantity: item.quantity,
@@ -352,12 +403,18 @@ suppliersRouter.post('/:id/orders', async (req, res, next) => {
   }
 });
 
+// ==================== POST Receive Purchase Order ====================
+
 suppliersRouter.post('/:supplierId/orders/:purchaseId/receive', async (req, res, next) => {
   try {
     const kiosk = await resolveRequestKiosk(req);
     if (!kiosk) throw Object.assign(new Error('No hay kiosko configurado'), { statusCode: 400 });
-    const supplier = await prisma.supplier.findFirst({ where: { id: req.params.supplierId, kioskId: kiosk.id } });
+
+    const supplier = await prisma.supplier.findFirst({
+      where: { id: req.params.supplierId, kioskId: kiosk.id },
+    });
     if (!supplier) throw Object.assign(new Error('Proveedor no encontrado'), { statusCode: 404 });
+
     const purchase = await prisma.purchase.findFirst({
       where: {
         id: req.params.purchaseId,
@@ -428,6 +485,107 @@ suppliersRouter.post('/:supplierId/orders/:purchaseId/receive', async (req, res,
     });
 
     res.json(updatedPurchase);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ==================== PUT Update Purchase Order ====================
+
+suppliersRouter.put('/:supplierId/orders/:purchaseId', async (req, res, next) => {
+  try {
+    const kiosk = await resolveRequestKiosk(req);
+    if (!kiosk) throw Object.assign(new Error('No hay kiosko configurado'), { statusCode: 400 });
+
+    const supplier = await prisma.supplier.findFirst({
+      where: { id: req.params.supplierId, kioskId: kiosk.id },
+    });
+    if (!supplier) throw Object.assign(new Error('Proveedor no encontrado'), { statusCode: 404 });
+
+    const purchase = await prisma.purchase.findFirst({
+      where: {
+        id: req.params.purchaseId,
+        supplierId: supplier.id,
+      },
+    });
+    if (!purchase) throw Object.assign(new Error('Pedido no encontrado'), { statusCode: 404 });
+
+    if (purchase.status === 'RECEIVED') {
+      return res.status(400).json({ error: 'No se puede editar un pedido ya recibido' });
+    }
+
+    const paymentMethod = req.body.paymentMethod !== undefined
+      ? normalizePaymentMethod(req.body.paymentMethod)
+      : purchase.paymentMethod;
+
+    const updatedPurchase = await prisma.purchase.update({
+      where: { id: purchase.id },
+      data: {
+        paymentMethod,
+        deliveryDate: req.body.deliveryDate !== undefined ? parseDateValue(req.body.deliveryDate) : undefined,
+        notes: req.body.notes !== undefined ? req.body.notes || null : undefined,
+      },
+      include: {
+        supplier: true,
+        items: buildPurchaseItemSelect(),
+      },
+    });
+
+    res.json(updatedPurchase);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ==================== DELETE Purchase Order ====================
+
+suppliersRouter.delete('/:supplierId/orders/:purchaseId', async (req, res, next) => {
+  try {
+    const kiosk = await resolveRequestKiosk(req);
+    if (!kiosk) throw Object.assign(new Error('No hay kiosko configurado'), { statusCode: 400 });
+
+    const supplier = await prisma.supplier.findFirst({
+      where: { id: req.params.supplierId, kioskId: kiosk.id },
+    });
+    if (!supplier) throw Object.assign(new Error('Proveedor no encontrado'), { statusCode: 404 });
+
+    const purchase = await prisma.purchase.findFirst({
+      where: {
+        id: req.params.purchaseId,
+        supplierId: supplier.id,
+      },
+    });
+    if (!purchase) throw Object.assign(new Error('Pedido no encontrado'), { statusCode: 404 });
+
+    if (purchase.status === 'RECEIVED') {
+      return res.status(400).json({ error: 'No se puede eliminar un pedido ya recibido' });
+    }
+
+    await prisma.$transaction(async (tx) => {
+      // Eliminar items del pedido
+      await tx.purchaseItem.deleteMany({
+        where: { purchaseId: purchase.id },
+      });
+
+      // Eliminar el pedido
+      await tx.purchase.delete({
+        where: { id: purchase.id },
+      });
+
+      // Si fue pago en efectivo, revertir el movimiento de caja
+      if (purchase.paymentMethod === 'CASH' && purchase.totalAmount > 0) {
+        await tx.cashFlow.deleteMany({
+          where: {
+            type: 'EXPENSE',
+            category: 'Compras',
+            description: { contains: supplier.name },
+            amount: purchase.totalAmount,
+          },
+        });
+      }
+    });
+
+    res.status(204).end();
   } catch (err) {
     next(err);
   }

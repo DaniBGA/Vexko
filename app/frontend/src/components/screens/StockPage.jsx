@@ -6,13 +6,9 @@ import { Search, Plus } from 'lucide-react';
 import { api } from '../../lib/api.js';
 import { PageHeader, Badge, Spinner, EmptyState, fmt } from '../ui/index.jsx';
 import { Package } from 'lucide-react';
+import StockProductModal from './StockProductModal.jsx';
 
 const PAGE_SIZE = 10;
-
-const PRODUCT_FILTER = [
-  { value: '', label: 'Todos' },
-  { value: 'added', label: 'Agregados' },
-];
 
 function getStockStatus(product) {
   if ((product.stock ?? 0) === 0) return 'OUT';
@@ -41,18 +37,18 @@ function expiryLabel(date) {
 export default function StockPage() {
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
-  const [productFilter, setProductFilter] = useState('');
+  const [addModalOpen, setAddModalOpen] = useState(false);
   const [page, setPage] = useState(1);
 
   const searchTerm = search.trim();
 
   useEffect(() => {
     setPage(1);
-  }, [searchTerm, productFilter]);
+  }, [searchTerm]);
 
   const { data, isLoading } = useQuery({
-    queryKey: ['products', 'stock-view', searchTerm, productFilter, page],
-    queryFn: () => api.get('/products', { params: { stockView: 1, added: productFilter === 'added' ? 1 : undefined, search: searchTerm || undefined, page, limit: PAGE_SIZE } }).then((r) => r.data),
+    queryKey: ['products', 'stock-local', searchTerm, page],
+    queryFn: () => api.get('/products', { params: { stockView: 1, added: 1, search: searchTerm || undefined, page, limit: PAGE_SIZE } }).then((r) => r.data),
   });
 
   const products = data?.products ?? [];
@@ -103,16 +99,7 @@ export default function StockPage() {
             className="field-input input-with-icon py-2 text-sm w-52"
           />
         </div>
-        <select
-          value={productFilter}
-          onChange={(e) => setProductFilter(e.target.value)}
-          className="field-input py-2 text-sm w-40"
-        >
-          {PRODUCT_FILTER.map((f) => (
-            <option key={f.value} value={f.value}>{f.label}</option>
-          ))}
-        </select>
-        <button onClick={() => navigate('/catalogo')} className="btn-primary">
+        <button onClick={() => setAddModalOpen(true)} className="btn-primary">
           <Plus size={14} className="inline mr-1" />
           Buscar / agregar producto
         </button>
@@ -121,8 +108,8 @@ export default function StockPage() {
       <div className="flex-1 overflow-y-auto p-6 space-y-5">
         <div className="card">
           <div className="card-header">
-            <h3 className="card-title">Todos los productos</h3>
-            <span className="text-xs text-gray-400">{total} productos{productFilter === 'added' ? ' agregados' : ''}</span>
+            <h3 className="card-title">Productos del stock</h3>
+            <span className="text-xs text-gray-400">{total} productos agregados al kiosco</span>
           </div>
           {isLoading ? (
             <Spinner />
@@ -185,6 +172,7 @@ export default function StockPage() {
           )}
         </div>
       </div>
+      <StockProductModal open={addModalOpen} onClose={() => setAddModalOpen(false)} />
     </div>
   );
 }

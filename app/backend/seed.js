@@ -8,13 +8,33 @@ async function main() {
   console.log('🌱 Iniciando seed...');
 
   // ─── Usuario dueño ────────────────────────────────────────────────────────
-  const passwordHash = await bcrypt.hash('kiosco123', 10);
+  const ownerPassword = 'kiosco123';
+  const ownerPasswordHash = await bcrypt.hash(ownerPassword, 10);
   const owner = await prisma.user.upsert({
     where: { email: 'admin@kiosco.com' },
     update: {},
-    create: { name: 'Dueño', email: 'admin@kiosco.com', passwordHash, role: 'OWNER' },
+    create: { name: 'Dueño', email: 'admin@kiosco.com', passwordHash: ownerPasswordHash, role: 'OWNER' },
   });
   console.log('✓ Usuario:', owner.email);
+
+  const adminPassword = 'VexkoAdmin123!';
+  const adminPasswordHash = await bcrypt.hash(adminPassword, 10);
+  const admin = await prisma.user.upsert({
+    where: { email: 'admin@vexko.local' },
+    update: {
+      name: 'Admin Vexko',
+      passwordHash: adminPasswordHash,
+      role: 'OWNER',
+      active: true,
+    },
+    create: {
+      name: 'Admin Vexko',
+      email: 'admin@vexko.local',
+      passwordHash: adminPasswordHash,
+      role: 'OWNER',
+    },
+  });
+  console.log('✓ Admin:', admin.email);
 
   const customer = await prisma.customer.upsert({
     where: { name: 'Kiosco Demo' },
@@ -147,7 +167,8 @@ async function main() {
   });
 
   console.log('\n✅ Seed completado!');
-  console.log('   Login: admin@kiosco.com / kiosco123');
+  console.log(`   Login dueño: ${owner.email} / ${ownerPassword}`);
+  console.log(`   Login admin: ${admin.email} / ${adminPassword}`);
 }
 
 main()

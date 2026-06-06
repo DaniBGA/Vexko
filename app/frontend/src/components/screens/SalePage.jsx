@@ -48,11 +48,13 @@ export default function SalePage() {
 
   const { data: products = [], isFetching } = useQuery({
     queryKey: ['products-search', searchTerm],
-    queryFn: () => api.get('/products', { params: { search: searchTerm } }).then((r) => unwrapProductsResponse(r.data)),
+    queryFn: () => api.get('/products', { params: { search: searchTerm, stockView: 1, added: 1 } }).then((r) => unwrapProductsResponse(r.data)),
     enabled: searchTerm.length >= 1,
   });
 
-  const hasGlobalMatch = products.some((product) => !product.isCustom);
+  // show only products that have stock > 0 (available to sell)
+  const visibleProducts = (products || []).filter((p) => (p.stock || 0) > 0);
+  const hasGlobalMatch = visibleProducts.some((product) => !product.isCustom);
 
   useEffect(() => {
     if (searchParam && search !== searchParam) {
@@ -160,19 +162,19 @@ export default function SalePage() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-700 text-brand-sidebar">Buscar producto</div>
-                    <div className="text-xs text-gray-500 mb-3">Escribí una letra o parte del nombre para encontrar productos del catálogo global.</div>
+                    <div className="text-xs text-gray-500 mb-3">Escribí una letra o parte del nombre para encontrar productos en tu stock.</div>
                     <div className="relative">
                       <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
                       <input
                         value={search}
                         onChange={(e) => setSearch(e.target.value)}
-                        placeholder="Buscar por nombre o ID"
+                        placeholder="Buscar por nombre, ID o SKU"
                         className="field-input input-with-icon pr-4 py-3 rounded-xl bg-white"
                         autoFocus
                       />
                     </div>
                     <div className="text-xs text-gray-500 mt-2 rounded-md bg-slate-50 p-3 border border-dashed border-slate-200">
-                      Tip: Si no encontrás tu producto, escribí el nombre y vas a ver la opción "Agregar producto" para crearlo en tu kiosco.
+                      Tip: Si no encontrás tu producto en tu stock, escribí el nombre y vas a ver la opción "Agregar producto" para crearlo en tu kiosco.
                     </div>
                   </div>
                 </div>
@@ -181,7 +183,7 @@ export default function SalePage() {
               {searchTerm.length >= 1 && (
                 <div className="mt-3 space-y-2">
                   {isFetching && <p className="text-xs text-gray-400 py-2">Buscando...</p>}
-                  {products.slice(0, 6).map((p) => (
+                  {visibleProducts.slice(0, 6).map((p) => (
                     <div key={p.id} className="flex items-center justify-between p-3 rounded-lg bg-gray-50 border border-gray-100">
                       <div className="min-w-0">
                         <div className="text-sm font-600 text-gray-800 truncate flex items-center gap-2">

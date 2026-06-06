@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { ArrowLeft, Plus, Search, X, Package, Clock3, CircleCheckBig, ChevronLeft, ChevronRight } from 'lucide-react';
+import { ArrowLeft, Plus, Search, X, Package, Clock3, CircleCheckBig, ChevronLeft, ChevronRight, Edit, Trash2 } from 'lucide-react';
 import { api } from '../../lib/api.js';
 import { unwrapProductsResponse } from '../../lib/response.js';
 import { PageHeader, Spinner, EmptyState, fmt } from '../ui/index.jsx';
@@ -38,11 +38,47 @@ function getPackUnits(product) {
 }
 
 function getItemTotalUnits(item) {
+  const packUnits = getItemPackUnits(item);
   if (item.product.loadMode === 'pack') {
-    return (item.packQuantity * getPackUnits(item.product)) + item.unitQuantity;
+    return (item.packQuantity * packUnits) + item.unitQuantity;
   }
 
   return item.unitQuantity;
+}
+
+function getItemPackUnits(item) {
+  const override = item.packUnitsOverride !== null && item.packUnitsOverride !== undefined ? Number(item.packUnitsOverride) : null;
+  if (override !== null && Number.isFinite(override) && override > 0) {
+    return override;
+  }
+
+  return getPackUnits(item.product);
+}
+
+function getItemEffectiveUnitCost(item) {
+  const explicitUnit = item.unitCostOverride !== null && item.unitCostOverride !== undefined ? Number(item.unitCostOverride) : null;
+  const explicitPack = item.packPriceOverride !== null && item.packPriceOverride !== undefined ? Number(item.packPriceOverride) : null;
+
+  if (explicitUnit !== null) return explicitUnit;
+  if (explicitPack !== null && item.product.loadMode === 'pack') {
+    const packUnits = getItemPackUnits(item);
+    if (packUnits > 0) {
+      return explicitPack / packUnits;
+    }
+  }
+
+  return productUnitPrice(item.product);
+}
+
+function getItemEffectivePackPrice(item) {
+  const explicitPack = item.packPriceOverride !== null && item.packPriceOverride !== undefined ? Number(item.packPriceOverride) : null;
+  if (explicitPack !== null) return explicitPack;
+
+  if (item.product.loadMode === 'pack' && item.product.packPrice) {
+    return Number(item.product.packPrice);
+  }
+
+  return null;
 }
 
 export default function SupplierDetailPage() {
@@ -53,6 +89,7 @@ export default function SupplierDetailPage() {
   const ordersLimit = 8;
   const [openOrderModal, setOpenOrderModal] = useState(false);
   const [openReceiveModal, setOpenReceiveModal] = useState(null);
+  const [openEditModal, setOpenEditModal] = useState(null);
   const [orderNotes, setOrderNotes] = useState('');
   const [deliveryDate, setDeliveryDate] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('CASH');
@@ -103,6 +140,32 @@ export default function SupplierDetailPage() {
     },
   });
 
+  const { mutate: updateOrder, isPending: isUpdatingOrder } = useMutation({
+    mutationFn: (body) => api.put(`/suppliers/${id}/orders/${openEditModal.id}`, body).then((r) => r.data),
+    onSuccess: () => {
+      toast.success('Pedido actualizado');
+      setOpenEditModal(null);
+      setOrderNotes('');
+      setDeliveryDate('');
+      setPaymentMethod('CASH');
+      queryClient.invalidateQueries({ queryKey: ['supplier', id] });
+      queryClient.invalidateQueries({ queryKey: ['suppliers'] });
+    },
+  });
+
+  const { mutate: deleteOrder, isPending: isDeletingOrder } = useMutation({
+    mutationFn: (purchaseId) => api.delete(`/suppliers/${id}/orders/${purchaseId}`),
+    onSuccess: () => {
+      toast.success('Pedido eliminado');
+      setOrdersPage(1);
+      queryClient.invalidateQueries({ queryKey: ['supplier', id] });
+      queryClient.invalidateQueries({ queryKey: ['suppliers'] });
+    },
+    onError: (error) => {
+      toast.error(error.response?.data?.error || 'No se pudo eliminar el pedido');
+    },
+  });
+
   const filteredProducts = useMemo(() => {
     if (!searchTerm) return [];
     const seen = new Set();
@@ -133,8 +196,23 @@ export default function SupplierDetailPage() {
         product,
         unitQuantity: product.loadMode === 'pack' ? 0 : 1,
         packQuantity: product.loadMode === 'pack' ? 1 : 0,
+        unitCostOverride: null,
+        packPriceOverride: null,
+        packUnitsOverride: null,
       }];
     });
+  }
+
+  function updateItemUnitCost(productId, value) {
+    setItems((current) => current.map((item) => (item.product.id === productId ? { ...item, unitCostOverride: value === '' ? null : Number(value) } : item)));
+  }
+
+  function updateItemPackPrice(productId, value) {
+    setItems((current) => current.map((item) => (item.product.id === productId ? { ...item, packPriceOverride: value === '' ? null : Number(value) } : item)));
+  }
+
+  function updateItemPackUnits(productId, value) {
+    setItems((current) => current.map((item) => (item.product.id === productId ? { ...item, packUnitsOverride: value === '' ? null : Number(value) } : item)));
   }
 
   function updateUnitQty(productId, delta) {
@@ -167,15 +245,42 @@ export default function SupplierDetailPage() {
       notes: orderNotes,
       deliveryDate: deliveryDate || null,
       paymentMethod,
-      items: items.map((item) => ({
-        productId: item.product.id,
-        quantity: getItemTotalUnits(item),
-        unitCost: productUnitPrice(item.product),
-      })),
+      items: items.map((item) => {
+        const totalUnits = getItemTotalUnits(item);
+        const unitCost = getItemEffectiveUnitCost(item);
+        return {
+          productId: item.product.id,
+          quantity: totalUnits,
+          unitCost,
+        };
+      }),
     });
   }
 
-  const orderTotal = items.reduce((sum, item) => sum + productUnitPrice(item.product) * getItemTotalUnits(item), 0);
+  function submitEditOrder(e) {
+    e.preventDefault();
+    updateOrder({
+      notes: orderNotes,
+      deliveryDate: deliveryDate || null,
+      paymentMethod,
+    });
+  }
+
+  function openEditModalForOrder(purchase) {
+    setOpenEditModal(purchase);
+    setOrderNotes(purchase.notes || '');
+    setDeliveryDate(purchase.deliveryDate ? purchase.deliveryDate.split('T')[0] : '');
+    setPaymentMethod(purchase.paymentMethod);
+  }
+
+  function closeEditModal() {
+    setOpenEditModal(null);
+    setOrderNotes('');
+    setDeliveryDate('');
+    setPaymentMethod('CASH');
+  }
+
+  const orderTotal = items.reduce((sum, item) => sum + getItemEffectiveUnitCost(item) * getItemTotalUnits(item), 0);
   const latestPurchase = supplier?.purchases?.[0];
   const totalOrdersPages = supplier?.totalPages || 0;
 
@@ -279,14 +384,38 @@ export default function SupplierDetailPage() {
                           <td className="td font-700">{fmt(purchase.totalAmount)}</td>
                           <td className="td text-gray-500">{purchase.items?.length || 0}</td>
                           <td className="td text-right">
-                            <button
-                              type="button"
-                              onClick={() => purchase.status !== 'RECEIVED' && setOpenReceiveModal(purchase)}
-                              disabled={purchase.status === 'RECEIVED'}
-                              className={`btn-outline py-1 px-3 text-xs ${purchase.status === 'RECEIVED' ? 'opacity-60 cursor-default' : ''}`}
-                            >
-                              {purchase.status === 'RECEIVED' ? 'Recibido' : 'pedido recibido'}
-                            </button>
+                            <div className="flex items-center justify-end gap-2">
+                              <button
+                                type="button"
+                                onClick={() => openEditModalForOrder(purchase)}
+                                disabled={purchase.status === 'RECEIVED'}
+                                className={`btn-outline py-1 px-2 text-xs inline-flex items-center gap-1 ${purchase.status === 'RECEIVED' ? 'opacity-50 cursor-default' : ''}`}
+                              >
+                                <Edit size={12} />
+                                Editar
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (confirm('¿Estás seguro de que querés eliminar este pedido?')) {
+                                    deleteOrder(purchase.id);
+                                  }
+                                }}
+                                disabled={purchase.status === 'RECEIVED'}
+                                className={`btn-outline py-1 px-2 text-xs text-red-600 inline-flex items-center gap-1 ${purchase.status === 'RECEIVED' ? 'opacity-50 cursor-default' : ''}`}
+                              >
+                                <Trash2 size={12} />
+                                Borrar
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => purchase.status !== 'RECEIVED' && setOpenReceiveModal(purchase)}
+                                disabled={purchase.status === 'RECEIVED'}
+                                className={`btn-outline py-1 px-3 text-xs ${purchase.status === 'RECEIVED' ? 'opacity-60 cursor-default' : ''}`}
+                              >
+                                {purchase.status === 'RECEIVED' ? 'Recibido' : 'pedido recibido'}
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))}
@@ -341,7 +470,7 @@ export default function SupplierDetailPage() {
             </div>
 
             <form onSubmit={submitOrder} className="flex-1 overflow-hidden flex flex-col">
-              <div className="flex-1 overflow-hidden grid grid-cols-1 xl:grid-cols-[1.4fr_0.9fr] gap-0 min-h-0">
+              <div className="flex-1 overflow-hidden grid grid-cols-1 xl:grid-cols-[1.25fr_1fr] gap-0 min-h-0">
                 <div className="border-r border-gray-100 p-5 overflow-y-auto space-y-4 min-h-0">
                 <div className="relative">
                   <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
@@ -396,7 +525,7 @@ export default function SupplierDetailPage() {
               </div>
 
                 <div className="p-5 overflow-hidden bg-slate-50 min-h-0 flex flex-col">
-                  <div className="card h-full flex flex-col min-h-0 overflow-hidden">
+                  <div className="card h-full min-h-[74vh] flex flex-col overflow-hidden">
                     <div className="card-header">
                       <h3 className="card-title">Pedido armado</h3>
                       <span className="text-xs text-gray-400">{items.length} productos</span>
@@ -445,7 +574,7 @@ export default function SupplierDetailPage() {
                                   </div>
 
                                   <div className="flex items-center justify-between text-xs text-gray-500">
-                                    <span>{item.packQuantity} pack{item.packQuantity === 1 ? '' : 's'} + {item.unitQuantity} unidad{item.unitQuantity === 1 ? '' : 'es'}</span>
+                                    <span>{item.packQuantity} pack{item.packQuantity === 1 ? '' : 's'} de {getItemPackUnits(item)} unidad{getItemPackUnits(item) === 1 ? '' : 'es'} + {item.unitQuantity} unidad{item.unitQuantity === 1 ? '' : 'es'}</span>
                                     <span>{getItemTotalUnits(item)} unidades totales</span>
                                   </div>
                                 </div>
@@ -456,11 +585,29 @@ export default function SupplierDetailPage() {
                                     <span className="min-w-8 text-center font-700">{item.unitQuantity}</span>
                                     <button type="button" onClick={() => updateUnitQty(item.product.id, 1)} className="w-8 h-8 rounded-lg bg-white border border-slate-200">+</button>
                                   </div>
-                                  <div className="text-sm font-800 text-brand-sidebar">{fmt(productUnitPrice(item.product) * item.unitQuantity)}</div>
+                                  <div className="text-sm font-800 text-brand-sidebar">{fmt((item.unitCostOverride ?? productUnitPrice(item.product)) * item.unitQuantity)}</div>
                                 </div>
                               )}
+                              <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <div>
+                                  <div className="text-xs uppercase tracking-wide text-gray-400 mb-1">Precio unidad (override)</div>
+                                  <input type="number" step="0.01" value={item.unitCostOverride ?? ''} onChange={(e) => updateItemUnitCost(item.product.id, e.target.value)} className="field-input" />
+                                </div>
+                                {item.product.loadMode === 'pack' && (
+                                  <>
+                                    <div>
+                                      <div className="text-xs uppercase tracking-wide text-gray-400 mb-1">Precio pack (override)</div>
+                                      <input type="number" step="0.01" value={item.packPriceOverride ?? ''} onChange={(e) => updateItemPackPrice(item.product.id, e.target.value)} className="field-input" />
+                                    </div>
+                                    <div>
+                                      <div className="text-xs uppercase tracking-wide text-gray-400 mb-1">Unidades por pack</div>
+                                      <input type="number" min="1" step="1" value={item.packUnitsOverride ?? ''} onChange={(e) => updateItemPackUnits(item.product.id, e.target.value)} className="field-input" />
+                                    </div>
+                                  </>
+                                )}
+                              </div>
                               {item.product.loadMode === 'pack' && (
-                                <div className="mt-3 text-sm font-800 text-brand-sidebar text-right">{fmt(productUnitPrice(item.product) * getItemTotalUnits(item))}</div>
+                                <div className="mt-3 text-sm font-800 text-brand-sidebar text-right">{fmt(getItemEffectiveUnitCost(item) * getItemTotalUnits(item))}</div>
                               )}
                             </div>
                           ))}
@@ -469,34 +616,36 @@ export default function SupplierDetailPage() {
                     </div>
 
                     <div className="border-t border-gray-100 bg-white p-5 space-y-4">
-                      <div className="field-group">
-                        <label className="field-label">Día de entrega del proveedor</label>
-                        <input
-                          type="date"
-                          value={deliveryDate}
-                          onChange={(e) => setDeliveryDate(e.target.value)}
-                          className="field-input"
-                        />
-                      </div>
-
-                      <div className="field-group">
-                        <label className="field-label">Notas del pedido</label>
-                        <textarea value={orderNotes} onChange={(e) => setOrderNotes(e.target.value)} rows={3} className="field-input resize-none" />
-                      </div>
-
-                      <div className="field-group">
-                        <label className="field-label">Método de pago</label>
-                        <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)} className="field-input">
-                          {PAYMENT_METHODS.map((method) => <option key={method.value} value={method.value}>{method.label}</option>)}
-                        </select>
-                      </div>
-
-                      <div className="rounded-2xl bg-brand-navy text-white p-4 flex items-center justify-between">
+                      <div className="rounded-2xl bg-brand-navy text-white p-4 flex items-center justify-between gap-4">
                         <div>
                           <div className="text-xs uppercase tracking-[0.08em] text-slate-300 font-700">Total estimado</div>
                           <div className="text-2xl font-800 mt-1">{fmt(orderTotal)}</div>
                         </div>
                         <div className="text-xs text-slate-300 text-right max-w-40">Si lo pagás en efectivo, se descuenta de la caja al guardar el pedido.</div>
+                      </div>
+
+                      <div className="grid grid-cols-1 lg:grid-cols-[0.9fr_1.1fr_0.8fr] gap-3">
+                        <div className="field-group">
+                          <label className="field-label">Día de entrega del proveedor</label>
+                          <input
+                            type="date"
+                            value={deliveryDate}
+                            onChange={(e) => setDeliveryDate(e.target.value)}
+                            className="field-input"
+                          />
+                        </div>
+
+                        <div className="field-group">
+                          <label className="field-label">Notas del pedido</label>
+                          <textarea value={orderNotes} onChange={(e) => setOrderNotes(e.target.value)} rows={2} className="field-input resize-none" />
+                        </div>
+
+                        <div className="field-group">
+                          <label className="field-label">Método de pago</label>
+                          <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)} className="field-input">
+                            {PAYMENT_METHODS.map((method) => <option key={method.value} value={method.value}>{method.label}</option>)}
+                          </select>
+                        </div>
                       </div>
 
                       <div className="flex justify-end gap-3 pt-2">
@@ -549,18 +698,29 @@ export default function SupplierDetailPage() {
                       {openReceiveModal.items.map((item) => {
                         const product = item.product;
                         const nextStock = (product.stock || 0) + item.quantity;
+                        const packUnits = getItemPackUnits({ ...item, product });
+                        const packCount = product.loadMode === 'pack' ? Math.floor(item.quantity / packUnits) : 0;
+                        const looseUnits = product.loadMode === 'pack' ? item.quantity % packUnits : item.quantity;
                         return (
                           <tr key={item.id} className="hover:bg-gray-50 transition-colors">
                             <td className="td font-700 text-brand-sidebar">{product.name}</td>
                             <td className="td text-gray-500">{product.id}</td>
                             <td className="td text-gray-500">{product.subcategory?.category?.name || 'Sin categoría'}</td>
                             <td className="td text-gray-500">{product.loadMode === 'unit' ? 'Unidad' : 'Pack'}</td>
-                            <td className="td text-gray-500">{product.packUnits ? `${product.packUnits} u.` : '—'}</td>
-                            <td className="td">{product.packPrice ? fmt(product.packPrice) : '—'}</td>
-                            <td className="td">{fmt(productUnitPrice(product))}</td>
+                            <td className="td text-gray-500">{product.loadMode === 'pack' ? `${packUnits} u.` : '—'}</td>
+                            <td className="td">{getItemEffectivePackPrice(item) ? fmt(getItemEffectivePackPrice(item)) : '—'}</td>
+                            <td className="td">{fmt(getItemEffectiveUnitCost(item))}</td>
                             <td className="td">{product.stock}</td>
                             <td className="td font-700">{item.quantity}</td>
-                            <td className="td font-700 text-green-700">{nextStock}</td>
+                            <td className="td font-700 text-green-700">
+                              {nextStock}
+                              {product.loadMode === 'pack' && (
+                                <div className="mt-1 text-[11px] font-600 text-gray-500">
+                                  {packCount > 0 ? `${packCount} pack${packCount === 1 ? '' : 's'}` : '0 packs'}
+                                  {looseUnits > 0 ? ` + ${looseUnits} unidad${looseUnits === 1 ? '' : 'es'}` : ''}
+                                </div>
+                              )}
+                            </td>
                           </tr>
                         );
                       })}
@@ -576,6 +736,76 @@ export default function SupplierDetailPage() {
                 {isReceiving ? 'Procesando...' : 'pedido recibido'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {openEditModal && supplier && (
+        <div className="fixed inset-0 z-50 bg-black/50 px-4 py-6 flex items-center justify-center">
+          <div className="w-full max-w-2xl rounded-2xl bg-white shadow-2xl overflow-hidden max-h-[92vh] flex flex-col">
+            <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
+              <div>
+                <div className="text-sm font-700 text-brand-sidebar">Editar pedido</div>
+                <div className="text-xs text-gray-400">Modificá los datos del pedido.</div>
+              </div>
+              <button type="button" onClick={closeEditModal} className="rounded-xl p-3 text-gray-600 hover:bg-gray-100 hover:text-gray-900 transition-colors">
+                <span className="text-3xl leading-none font-700">×</span>
+              </button>
+            </div>
+
+            <form onSubmit={submitEditOrder} className="flex-1 overflow-hidden flex flex-col">
+              <div className="flex-1 overflow-y-auto p-5 space-y-4 min-h-0">
+                <div>
+                  <label className="field-label">Fecha de entrega</label>
+                  <input
+                    type="date"
+                    value={deliveryDate}
+                    onChange={(e) => setDeliveryDate(e.target.value)}
+                    className="field-input"
+                  />
+                </div>
+
+                <div>
+                  <label className="field-label">Método de pago</label>
+                  <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)} className="field-input">
+                    {PAYMENT_METHODS.map((method) => (
+                      <option key={method.value} value={method.value}>
+                        {method.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="field-label">Notas</label>
+                  <textarea
+                    value={orderNotes}
+                    onChange={(e) => setOrderNotes(e.target.value)}
+                    placeholder="Notas sobre el pedido..."
+                    className="field-input min-h-24 resize-none"
+                  />
+                </div>
+
+                <div className="rounded-2xl bg-slate-50 border border-slate-200 p-4 text-sm text-gray-600">
+                  <div className="font-700 text-gray-700 mb-2">Productos del pedido (no editables)</div>
+                  <div className="space-y-2 text-xs">
+                    {openEditModal.items?.map((item) => (
+                      <div key={item.id} className="flex justify-between items-center">
+                        <span>{item.product.name}</span>
+                        <span className="font-700">x{item.quantity}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="border-t border-gray-100 px-5 py-4 flex justify-end gap-3 bg-white">
+                <button type="button" onClick={closeEditModal} className="btn-outline">Cancelar</button>
+                <button type="submit" disabled={isUpdatingOrder} className="btn-primary disabled:opacity-60">
+                  {isUpdatingOrder ? 'Guardando...' : 'Guardar cambios'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

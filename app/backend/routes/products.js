@@ -112,7 +112,17 @@ function buildSearchWhere(search) {
 }
 
 function normalizeProductKey(product) {
-  return String(product?.name || '').trim().toLowerCase();
+  return [
+    String(product?.name || '').trim().toLowerCase(),
+    product?.categoryId || '',
+    product?.subcategoryId || '',
+    product?.barcode || '',
+    product?.sku || '',
+    product?.supplierId || '',
+    product?.loadMode || '',
+    product?.customerId || '',
+    product?.isCustom ? '1' : '0',
+  ].join('::');
 }
 
 function dedupeProductsByName(products) {
@@ -165,6 +175,7 @@ productsRouter.get('/', async (req, res, next) => {
     }
 
     const stockView = req.query.stockView === '1' || req.query.stockView === 'true';
+    const available = req.query.available === '1' || req.query.available === 'true';
     const addedOnly = req.query.added === '1' || req.query.added === 'true' || req.query.agregados === '1' || req.query.agregados === 'true';
     const includeGlobal = req.query.global === '1' || req.query.includeGlobal === 'true';
     const dedupeGlobal = req.query.dedupe !== 'false';
@@ -201,9 +212,14 @@ productsRouter.get('/', async (req, res, next) => {
         };
       });
 
-      const filtered = addedOnly
-        ? merged.filter((product) => Boolean(product.customerId) || Boolean(product.kioskInventoryId))
-        : merged;
+      const dedupedMerged = dedupeProductsByName(merged);
+      let filtered = addedOnly
+        ? dedupedMerged.filter((product) => Boolean(product.customerId) || Boolean(product.kioskInventoryId))
+        : dedupedMerged;
+
+      if (available) {
+        filtered = filtered.filter((p) => (p.stock || 0) > 0);
+      }
 
       if (usePagination) {
         const pageNumber = normalizePage(page);
@@ -254,6 +270,8 @@ productsRouter.get('/', async (req, res, next) => {
             : 'OK',
         }));
 
+        const finalEnriched = available ? enriched.filter((p) => (p.stock || 0) > 0) : enriched;
+
         res.json({
           products: enriched,
           total,
@@ -273,7 +291,9 @@ productsRouter.get('/', async (req, res, next) => {
           : 'OK',
       }));
 
-      res.json(enriched);
+      const finalEnriched = available ? enriched.filter((p) => (p.stock || 0) > 0) : enriched;
+
+      res.json(finalEnriched);
       return;
     }
 
@@ -304,7 +324,7 @@ productsRouter.get('/', async (req, res, next) => {
         }),
       ]);
 
-      const enriched = products.map((p) => {
+      let enriched = products.map((p) => {
         const inventory = getKioskInventory(p);
         return {
           ...mergeProductInventory(p),
@@ -315,13 +335,16 @@ productsRouter.get('/', async (req, res, next) => {
             : 'OK',
         };
       });
+      if (available) {
+        enriched = enriched.filter((p) => (p.stock || 0) > 0);
+      }
 
       res.json({
         products: enriched,
-        total,
+        total: enriched.length,
         page: pageNumber,
         limit: pageSize,
-        totalPages: total === 0 ? 0 : Math.ceil(total / pageSize),
+        totalPages: enriched.length === 0 ? 0 : Math.ceil(enriched.length / pageSize),
       });
       return;
     }
@@ -332,7 +355,7 @@ productsRouter.get('/', async (req, res, next) => {
       orderBy: { name: 'asc' },
     });
 
-    const enriched = products.map((p) => {
+    let enriched = products.map((p) => {
       const inventory = getKioskInventory(p);
       return {
         ...mergeProductInventory(p),
@@ -343,6 +366,9 @@ productsRouter.get('/', async (req, res, next) => {
           : 'OK',
       };
     });
+    if (available) {
+      enriched = enriched.filter((p) => (p.stock || 0) > 0);
+    }
 
     res.json(enriched);
   } catch (err) {
@@ -440,67 +466,22 @@ productsRouter.post('/:id/clone-to-kiosk', async (req, res, next) => {
       return res.status(404).json({ error: 'Producto no encontrado' });
     }
 
-    const existing = await prisma.product.findFirst({
-      where: {
-        isCustom: true,
-        name: source.name,
-        subcategoryId: source.subcategoryId,
-        supplierId: source.supplierId,
-        costPrice: source.costPrice,
-        salePrice: source.salePrice,
-        loadMode: source.loadMode,
-        kioskProducts: { some: { kioskId: kiosk.id } },
-      },
+    const resolvedStock = toInt(req.body.stock);
+    const resolvedMinStock = req.body.minStock !== undefined ? toInt(req.body.minStock) : undefined;
+    const resolvedPrice = req.body.price !== undefined ? toNumber(req.body.price) : undefined;
+
+    await upsertKioskInventory(prisma, kiosk.id, source.id, {
+      stock: resolvedStock,
+      minStock: resolvedMinStock,
+      price: resolvedPrice,
+    });
+
+    const linkedProduct = await prisma.product.findUnique({
+      where: { id: source.id },
       include: buildProductInclude(kiosk.id),
     });
 
-    if (existing) {
-      return res.json(mergeProductInventory(existing));
-    }
-
-    const product = await prisma.product.create({
-      data: {
-        name: source.name,
-        description: source.description,
-        barcode: null,
-        sku: null,
-        loadMode: source.loadMode,
-        basePrice: source.basePrice,
-        baseCost: source.baseCost,
-        packPrice: source.packPrice,
-        packUnits: source.packUnits,
-        packCount: source.packCount,
-        categoryId: source.categoryId,
-        subcategoryId: source.subcategoryId,
-        isCustom: true,
-        customerId: kiosk.customerId,
-        stock: 0,
-        minStock: source.minStock ?? 0,
-        salePrice: source.salePrice,
-        costPrice: source.costPrice,
-        expiresAt: source.expiresAt,
-        supplierId: source.supplierId,
-        active: true,
-      },
-      include: buildProductInclude(kiosk.id),
-    });
-
-    await prisma.kioskProduct.create({
-      data: {
-        kioskId: kiosk.id,
-        productId: product.id,
-        stock: 0,
-        minStock: source.minStock ?? 0,
-        price: source.salePrice ?? null,
-      },
-    });
-
-    const createdProduct = await prisma.product.findUnique({
-      where: { id: product.id },
-      include: buildProductInclude(kiosk.id),
-    });
-
-    res.status(201).json(mergeProductInventory(createdProduct));
+    res.status(200).json(mergeProductInventory(linkedProduct));
   } catch (err) {
     next(err);
   }
@@ -516,6 +497,76 @@ productsRouter.post('/', async (req, res, next) => {
       ? customerId || null
       : (wantsCustom ? kiosk?.customerId || null : null);
     const values = computeProductValues(req.body);
+
+    if (wantsCustom && resolvedCustomerId) {
+      const existingCustomProduct = await prisma.product.findFirst({
+        where: {
+          active: true,
+          isCustom: true,
+          customerId: resolvedCustomerId,
+          OR: [
+            ...(barcode ? [{ barcode }] : []),
+            ...(sku ? [{ sku }] : []),
+            {
+              name,
+              subcategoryId: subcategoryId || null,
+              supplierId: supplierId || null,
+              loadMode: values.loadMode,
+              packPrice: values.packPrice ?? null,
+              packUnits: values.packUnits ?? null,
+              packCount: values.packCount ?? null,
+            },
+          ],
+        },
+        include: buildProductInclude(kiosk?.id),
+      });
+
+      if (existingCustomProduct) {
+        const updatedProduct = await prisma.product.update({
+          where: { id: existingCustomProduct.id },
+          data: {
+            name,
+            barcode: barcode || null,
+            sku: sku || null,
+            loadMode: values.loadMode,
+            subcategoryId: subcategoryId || null,
+            supplierId: supplierId || null,
+            basePrice: values.packPrice ?? null,
+            baseCost: values.unitCost,
+            packPrice: values.packPrice ?? null,
+            packUnits: values.packUnits ?? null,
+            packCount: values.packCount ?? null,
+            costPrice: values.unitCost,
+            salePrice: values.salePrice,
+            stock: values.stock ?? 0,
+            minStock: toInt(minStock) || 0,
+            expiresAt: expiresAt ? new Date(expiresAt) : null,
+            description,
+            isCustom: true,
+            customerId: resolvedCustomerId,
+            active: true,
+          },
+          include: buildProductInclude(kiosk?.id),
+        });
+
+        if (kiosk) {
+          await upsertKioskInventory(prisma, kiosk.id, updatedProduct.id, {
+            stock: values.stock ?? 0,
+            minStock: toInt(minStock) || 0,
+            price: values.salePrice ?? null,
+          });
+        }
+
+        const reloadedProduct = await prisma.product.findUnique({
+          where: { id: updatedProduct.id },
+          include: buildProductInclude(kiosk?.id),
+        });
+
+        res.status(200).json(mergeProductInventory(reloadedProduct));
+        return;
+      }
+    }
+
     const product = await prisma.product.create({
       data: {
         name,
@@ -617,8 +668,6 @@ productsRouter.put('/:id', async (req, res, next) => {
         minStock: minStock !== undefined ? toInt(minStock) : undefined,
         price: values.salePrice,
       });
-    } else {
-      await prisma.kioskProduct.deleteMany({ where: { kioskId: kiosk.id, productId: product.id } });
     }
 
     const updatedProduct = await prisma.product.findUnique({

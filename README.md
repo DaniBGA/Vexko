@@ -7,6 +7,9 @@ Deploy target: **Hostinger KVN2 VPS** con Nginx + PM2
 
 ## Estructura del proyecto
 
+Email: admin@vexko.local
+Contraseña: VexkoAdmin123!
+
 ```
 kiosco-app/
 ├── backend/          → API REST (Node/Express/Prisma)
