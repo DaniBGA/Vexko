@@ -14,9 +14,12 @@ cashFlowRouter.get('/', async (req, res, next) => {
     if (period === 'today') from = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     if (period === 'week') from = new Date(now.getTime() - 7 * 86400000);
 
+    const kiosk = await prisma.kiosk.findFirst({ orderBy: { createdAt: 'asc' } });
+    if (!kiosk) return res.json({ flows: [], totals: { income: 0, expense: 0, balance: 0 } });
+
     const flows = await prisma.cashFlow.findMany({
-      where: { createdAt: { gte: from } },
-      include: { user: { select: { name: true } } },
+      where: { kioskId: kiosk.id, createdAt: { gte: from } },
+      include: { kiosk: { select: { name: true } } },
       orderBy: { createdAt: 'desc' },
     });
 
@@ -36,13 +39,21 @@ cashFlowRouter.get('/', async (req, res, next) => {
 cashFlowRouter.post('/', async (req, res, next) => {
   try {
     const { type, amount, concept, category, date } = req.body;
+    const kiosk = await prisma.kiosk.findFirst({ orderBy: { createdAt: 'asc' } });
+    if (!kiosk) return res.status(400).json({ error: 'No hay kiosko configurado' });
+
+    const descriptionParts = [];
+    if (category) descriptionParts.push(category);
+    if (concept) descriptionParts.push(concept);
+    const description = descriptionParts.length ? descriptionParts.join(' — ') : null;
+
     const flow = await prisma.cashFlow.create({
       data: {
-        userId: req.user.id,
+        kioskId: kiosk.id,
         type,
         amount: parseFloat(amount),
-        concept,
-        category,
+          description,
+          category: category || null,
         createdAt: date ? new Date(date) : undefined,
       },
     });
@@ -54,5 +65,21 @@ cashFlowRouter.delete('/:id', async (req, res, next) => {
   try {
     await prisma.cashFlow.delete({ where: { id: req.params.id } });
     res.status(204).end();
+  } catch (err) { next(err); }
+});
+
+cashFlowRouter.put('/:id', async (req, res, next) => {
+  try {
+    const { amount, concept, category, date } = req.body;
+    const flow = await prisma.cashFlow.update({
+      where: { id: req.params.id },
+      data: {
+        amount: amount !== undefined ? parseFloat(amount) : undefined,
+        description: (category || concept) ? [category, concept].filter(Boolean).join(' — ') : undefined,
+        category: category !== undefined ? category : undefined,
+        createdAt: date ? new Date(date) : undefined,
+      },
+    });
+    res.json(flow);
   } catch (err) { next(err); }
 });
