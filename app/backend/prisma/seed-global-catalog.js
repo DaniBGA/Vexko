@@ -100,16 +100,6 @@ async function main() {
       stock: 0,
       minStock: 0,
     });
-
-    existingSignatures.add(buildProductSignature({
-      name: productName,
-      active: true,
-      isCustom: false,
-      customerId: null,
-      categoryId: category.id,
-      subcategoryId: subcategory.id,
-      loadMode: 'pack',
-    }));
   }
 
   const uniqueRows = productRows.filter((product) => {
