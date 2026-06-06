@@ -54,10 +54,10 @@ PORT=3001
 NODE_ENV=production
 DATABASE_URL=file:./prisma/prod.db
 JWT_SECRET=tu_jwt_secreto_largo_y_seguro_aqui
-CORS_ORIGIN=https://tu-dominio.com
+CORS_ORIGIN=https://vexko.net
 
 # Frontend (en app/frontend/.env.production.local)
-VITE_API_URL=https://api.tu-dominio.com
+VITE_API_URL=https://api.vexko.net
 ```
 
 ---
@@ -75,7 +75,10 @@ VITE_API_URL=https://api.tu-dominio.com
 ```bash
 # Como root, crear usuario
 adduser vexko
-addgroup vexko sudo
+# Añadir al grupo sudo (Debian/Ubuntu)
+adduser vexko sudo
+# Alternativa equivalente:
+# usermod -aG sudo vexko
 su - vexko
 
 # Configurar clave SSH (opcional pero recomendado)
@@ -165,8 +168,8 @@ sudo nano .env
 PORT=3001
 NODE_ENV=production
 DATABASE_URL=file:./prisma/prod.db
-JWT_SECRET=tu_jwt_secreto_muy_largo_y_seguro_12345
-CORS_ORIGIN=https://tu-dominio.com,https://www.tu-dominio.com
+JWT_SECRET=qwertyuiopasdfghjklzxcvbnm123456
+CORS_ORIGIN=https://vexko.net,https://www.vexko.net
 ```
 
 Ctrl+O, Enter, Ctrl+X para guardar.
@@ -207,7 +210,7 @@ sudo nano /etc/nginx/sites-available/vexko
 ```nginx
 server {
     listen 80;
-    server_name tu-dominio.com www.tu-dominio.com;
+    server_name vexko.net www.vexko.net;
 
     # Redirigir HTTP a HTTPS (después de certificado)
     return 301 https://$server_name$request_uri;
@@ -215,11 +218,11 @@ server {
 
 server {
     listen 443 ssl http2;
-    server_name tu-dominio.com www.tu-dominio.com;
+    server_name vexco.net www.vexko.net;
 
     # Certificados SSL (se configuran con certbot)
-    ssl_certificate /etc/letsencrypt/live/tu-dominio.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/tu-dominio.com/privkey.pem;
+    ssl_certificate /etc/letsencrypt/live/vexko.net/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/vexko.net/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers HIGH:!aNULL:!MD5;
 
@@ -268,7 +271,7 @@ sudo systemctl restart nginx
 ### 4.5 Configurar SSL con Let's Encrypt
 
 ```bash
-sudo certbot certonly --nginx -d tu-dominio.com -d www.tu-dominio.com
+sudo certbot certonly --nginx -d tu-dominio.com -d www.vexco.net
 
 # Seguir las instrucciones del asistente
 # (Ingresa tu email, acepta términos, etc)
@@ -695,7 +698,7 @@ sudo nano /etc/nginx/sites-available/vexko
 ```nginx
 server {
     listen 80;
-    server_name tu-dominio.com www.tu-dominio.com;
+    server_name vexko.net www.vexko.net;
 
     # Redirigir HTTP a HTTPS (después de certificado)
     return 301 https://$server_name$request_uri;
@@ -703,11 +706,11 @@ server {
 
 server {
     listen 443 ssl http2;
-    server_name tu-dominio.com www.tu-dominio.com;
+    server_name vexko.net www.vexko.net;
 
     # Certificados SSL (se configuran con certbot)
-    ssl_certificate /etc/letsencrypt/live/tu-dominio.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/tu-dominio.com/privkey.pem;
+    ssl_certificate /etc/letsencrypt/live/vexko.net/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/vexko.net/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers HIGH:!aNULL:!MD5;
 
@@ -719,7 +722,7 @@ server {
 
     # API Backend
     location /api {
-        proxy_pass http://localhost:3001;
+        proxy_pass http://2.25.177.76:3001;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection 'upgrade';
@@ -839,7 +842,9 @@ sudo tail -f /var/log/nginx/error.log
 
 ```bash
 # Probar renovación
+sudo systemctl stop nginx
 sudo certbot renew --dry-run
+sudo systemctl start nginx
 
 # El auto-renew se habilita por defecto con certbot
 ```

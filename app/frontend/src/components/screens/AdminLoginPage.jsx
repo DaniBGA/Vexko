@@ -30,11 +30,11 @@ export default function AdminLoginPage() {
           <div className="space-y-4">
             <div className="field-group">
               <label className="field-label">Email</label>
-              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="field-input" required autoFocus />
+              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="field-input" placeholder="admin@ejemplo.com" required autoFocus />
             </div>
             <div className="field-group">
               <label className="field-label">Contraseña</label>
-              <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="field-input" required />
+              <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="field-input" placeholder="Ingresa tu contraseña" required />
             </div>
           </div>
 

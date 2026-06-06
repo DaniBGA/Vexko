@@ -6,8 +6,8 @@ import { Store, Loader2 } from 'lucide-react';
 import Logo from '../ui/Logo.jsx';
 
 export default function LoginPage() {
-  const [email, setEmail] = useState('admin@kiosco.com');
-  const [password, setPassword] = useState('kiosco123');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const login = useAuthStore((state) => state.login);
   const isLoading = useAuthStore((state) => state.isLoading);
   const loginError = useAuthStore((state) => state.loginError);
@@ -50,6 +50,7 @@ export default function LoginPage() {
                 value={email}
                 onChange={handleEmailChange}
                 className="field-input"
+                placeholder="correo@ejemplo.com"
                 required
                 autoFocus
               />
@@ -61,6 +62,7 @@ export default function LoginPage() {
                 value={password}
                 onChange={handlePasswordChange}
                 className="field-input"
+                placeholder="Tu contraseña"
                 required
               />
             </div>
