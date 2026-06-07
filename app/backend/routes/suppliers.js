@@ -54,7 +54,14 @@ function normalizePaymentMethod(value) {
 function parseDateValue(value) {
   const raw = String(value || '').trim();
   if (!raw) return null;
-  const parsed = new Date(raw);
+  // If date is YYYY-MM-DD (date-only) construct a local midnight date to avoid UTC shift
+  const dateOnlyMatch = raw.match(/^\d{4}-\d{2}-\d{2}$/);
+  let parsed;
+  if (dateOnlyMatch) {
+    parsed = new Date(raw + 'T00:00:00'); // interpreted as local
+  } else {
+    parsed = new Date(raw);
+  }
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
@@ -336,16 +343,18 @@ suppliersRouter.post('/:id/orders', async (req, res, next) => {
       const product = products.find((current) => current.id === item.productId);
       const explicitPackPrice = item.packPrice !== undefined && item.packPrice !== null ? Number(item.packPrice) : null;
       const explicitUnitCost = item.unitCost !== undefined && item.unitCost !== null ? Number(item.unitCost) : null;
+      const explicitPackUnits = item.packUnits !== undefined && item.packUnits !== null ? Number(item.packUnits) : null;
 
-      const packCostFromProduct = product.loadMode === 'pack' && product.packPrice && product.packUnits
-        ? Number(product.packPrice) / Number(product.packUnits)
+      const packUnitsToUse = explicitPackUnits || product.packUnits || null;
+      const packCostFromProduct = product.loadMode === 'pack' && product.packPrice && packUnitsToUse
+        ? Number(product.packPrice) / Number(packUnitsToUse)
         : null;
 
       let unitCost = 0;
       if (explicitUnitCost !== null) {
         unitCost = explicitUnitCost;
-      } else if (explicitPackPrice !== null && product.loadMode === 'pack' && product.packUnits) {
-        unitCost = explicitPackPrice / Number(product.packUnits);
+      } else if (explicitPackPrice !== null && product.loadMode === 'pack' && packUnitsToUse) {
+        unitCost = explicitPackPrice / Number(packUnitsToUse);
       } else {
         unitCost = product.costPrice ?? packCostFromProduct ?? product.salePrice ?? 0;
       }
@@ -458,17 +467,26 @@ suppliersRouter.post('/:supplierId/orders/:purchaseId/receive', async (req, res,
     const receivedAt = new Date();
     const updatedPurchase = await prisma.$transaction(async (tx) => {
       for (const item of purchase.items) {
-        await tx.kioskProduct.upsert({
-          where: { kioskId_productId: { kioskId: kiosk.id, productId: item.productId } },
-          create: {
-            kioskId: kiosk.id,
-            productId: item.productId,
-            stock: item.quantity,
-            minStock: 0,
-            price: null,
-          },
-          update: { stock: { increment: item.quantity } },
-        });
+        // determine unit cost (from purchase item)
+        const unitCost = item.unitCost ?? 0;
+
+        // ensure supplier-product record exists and update cost
+        const existingSupplierProduct = await tx.supplierProduct.findFirst({ where: { supplierId: supplier.id, productId: item.productId } });
+        if (existingSupplierProduct) {
+          await tx.supplierProduct.update({ where: { id: existingSupplierProduct.id }, data: { cost: unitCost } });
+        } else {
+          await tx.supplierProduct.create({ data: { supplierId: supplier.id, productId: item.productId, cost: unitCost } });
+        }
+
+        // upsert kioskProduct: add stock and set price if missing
+        const kp = await tx.kioskProduct.findFirst({ where: { kioskId: kiosk.id, productId: item.productId } });
+        if (kp) {
+          await tx.kioskProduct.update({ where: { id: kp.id }, data: { stock: { increment: item.quantity } } });
+        } else {
+          // set price to product.salePrice if available
+          const prod = await tx.product.findUnique({ where: { id: item.productId }, select: { salePrice: true } });
+          await tx.kioskProduct.create({ data: { kioskId: kiosk.id, productId: item.productId, stock: item.quantity, minStock: 0, price: prod?.salePrice || null } });
+        }
       }
 
       return tx.purchase.update({
