@@ -121,3 +121,7 @@ app/backend/.env*
 # Production database
 prisma/prod.db
 prisma/prod.db-journal
+
+# Local GitHub CLI (if downloaded into repo for automation)
+tools/gh/
+tools/gh.exe
