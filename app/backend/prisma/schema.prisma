@@ -320,6 +320,8 @@ model PurchaseItem {
   purchaseId String
   productId  String
   quantity   Int
+  packPrice  Float?
+  packUnits  Int?
   unitCost   Float
   lineTotal  Float
   purchase   Purchase @relation(fields: [purchaseId], references: [id], onDelete: Cascade)

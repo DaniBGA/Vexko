@@ -252,6 +252,8 @@ export default function SupplierDetailPage() {
           productId: item.product.id,
           quantity: totalUnits,
           unitCost,
+          packPrice: item.packPriceOverride ?? null,
+          packUnits: item.packUnitsOverride ?? null,
         };
       }),
     });
@@ -698,7 +700,8 @@ export default function SupplierDetailPage() {
                       {openReceiveModal.items.map((item) => {
                         const product = item.product;
                         const nextStock = (product.stock || 0) + item.quantity;
-                        const packUnits = getItemPackUnits({ ...item, product });
+                        const packUnits = item.packUnits ?? getItemPackUnits({ ...item, product });
+                        const packPrice = item.packPrice ?? getItemEffectivePackPrice(item);
                         const packCount = product.loadMode === 'pack' ? Math.floor(item.quantity / packUnits) : 0;
                         const looseUnits = product.loadMode === 'pack' ? item.quantity % packUnits : item.quantity;
                         return (
@@ -708,7 +711,7 @@ export default function SupplierDetailPage() {
                             <td className="td text-gray-500">{product.subcategory?.category?.name || 'Sin categoría'}</td>
                             <td className="td text-gray-500">{product.loadMode === 'unit' ? 'Unidad' : 'Pack'}</td>
                             <td className="td text-gray-500">{product.loadMode === 'pack' ? `${packUnits} u.` : '—'}</td>
-                            <td className="td">{getItemEffectivePackPrice(item) ? fmt(getItemEffectivePackPrice(item)) : '—'}</td>
+                            <td className="td">{packPrice ? fmt(packPrice) : '—'}</td>
                             <td className="td">{fmt(getItemEffectiveUnitCost(item))}</td>
                             <td className="td">{product.stock}</td>
                             <td className="td font-700">{item.quantity}</td>

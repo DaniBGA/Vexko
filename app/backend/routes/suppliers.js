@@ -54,8 +54,32 @@ function normalizePaymentMethod(value) {
 function parseDateValue(value) {
   const raw = String(value || '').trim();
   if (!raw) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    return new Date(`${raw}T00:00:00`);
+  }
   const parsed = new Date(raw);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function resolveUnitCost(item, product) {
+  const explicitUnitCost = toNumber(item.unitCost);
+  if (explicitUnitCost !== undefined) return explicitUnitCost;
+
+  const explicitPackPrice = toNumber(item.packPrice);
+  const explicitPackUnits = toInt(item.packUnits);
+  if (explicitPackPrice !== undefined && explicitPackUnits && explicitPackUnits > 0) {
+    return explicitPackPrice / explicitPackUnits;
+  }
+
+  if (product.loadMode === 'pack') {
+    const productPackPrice = toNumber(product.packPrice);
+    const productPackUnits = toInt(product.packUnits);
+    if (productPackPrice !== undefined && productPackUnits && productPackUnits > 0) {
+      return productPackPrice / productPackUnits;
+    }
+  }
+
+  return toNumber(product.costPrice) ?? toNumber(product.salePrice) ?? 0;
 }
 
 // ==================== Prisma Builders ====================
@@ -65,6 +89,8 @@ function buildPurchaseItemSelect() {
     select: {
       id: true,
       quantity: true,
+      packPrice: true,
+      packUnits: true,
       unitCost: true,
       lineTotal: true,
       product: {
@@ -307,6 +333,8 @@ suppliersRouter.post('/:id/orders', async (req, res, next) => {
         productId: String(item.productId || '').trim(),
         quantity: Math.max(1, toInt(item.quantity) || 0),
         unitCost: toNumber(item.unitCost),
+        packPrice: toNumber(item.packPrice),
+        packUnits: toInt(item.packUnits),
       }))
       .filter((item) => item.productId && item.quantity > 0);
 
@@ -334,25 +362,13 @@ suppliersRouter.post('/:id/orders', async (req, res, next) => {
 
     const purchaseItems = items.map((item) => {
       const product = products.find((current) => current.id === item.productId);
-      const explicitPackPrice = item.packPrice !== undefined && item.packPrice !== null ? Number(item.packPrice) : null;
-      const explicitUnitCost = item.unitCost !== undefined && item.unitCost !== null ? Number(item.unitCost) : null;
-
-      const packCostFromProduct = product.loadMode === 'pack' && product.packPrice && product.packUnits
-        ? Number(product.packPrice) / Number(product.packUnits)
-        : null;
-
-      let unitCost = 0;
-      if (explicitUnitCost !== null) {
-        unitCost = explicitUnitCost;
-      } else if (explicitPackPrice !== null && product.loadMode === 'pack' && product.packUnits) {
-        unitCost = explicitPackPrice / Number(product.packUnits);
-      } else {
-        unitCost = product.costPrice ?? packCostFromProduct ?? product.salePrice ?? 0;
-      }
+      const unitCost = resolveUnitCost(item, product);
 
       return {
         productId: product.id,
         quantity: item.quantity,
+        packPrice: item.packPrice,
+        packUnits: item.packUnits,
         unitCost,
         lineTotal: unitCost * item.quantity,
       };
@@ -458,6 +474,34 @@ suppliersRouter.post('/:supplierId/orders/:purchaseId/receive', async (req, res,
     const receivedAt = new Date();
     const updatedPurchase = await prisma.$transaction(async (tx) => {
       for (const item of purchase.items) {
+        const receivedUnitCost = Number(item.unitCost || 0);
+        const receivedPackUnits = Number(item.packUnits || item.product.packUnits || 0);
+        const receivedPackPrice = item.product.loadMode === 'pack' && receivedPackUnits > 0
+          ? receivedUnitCost * receivedPackUnits
+          : null;
+
+        await tx.product.update({
+          where: { id: item.productId },
+          data: {
+            supplierId: supplier.id,
+            costPrice: receivedUnitCost,
+            baseCost: receivedUnitCost,
+            ...(receivedPackPrice !== null ? { packPrice: receivedPackPrice } : {}),
+          },
+        });
+
+        await tx.supplierProduct.upsert({
+          where: { supplierId_productId: { supplierId: supplier.id, productId: item.productId } },
+          create: {
+            supplierId: supplier.id,
+            productId: item.productId,
+            cost: receivedUnitCost,
+          },
+          update: {
+            cost: receivedUnitCost,
+          },
+        });
+
         await tx.kioskProduct.upsert({
           where: { kioskId_productId: { kioskId: kiosk.id, productId: item.productId } },
           create: {
@@ -465,7 +509,7 @@ suppliersRouter.post('/:supplierId/orders/:purchaseId/receive', async (req, res,
             productId: item.productId,
             stock: item.quantity,
             minStock: 0,
-            price: null,
+            price: item.product.salePrice ?? null,
           },
           update: { stock: { increment: item.quantity } },
         });
