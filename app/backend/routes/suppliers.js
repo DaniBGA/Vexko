@@ -55,7 +55,8 @@ function parseDateValue(value) {
   const raw = String(value || '').trim();
   if (!raw) return null;
   if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
-    return new Date(`${raw}T00:00:00`);
+    const [year, month, day] = raw.split('-').map(Number);
+    return new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
   }
   const parsed = new Date(raw);
   return Number.isNaN(parsed.getTime()) ? null : parsed;

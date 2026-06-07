@@ -8,7 +8,7 @@ import { PageHeader, Spinner, EmptyState } from '../ui/index.jsx';
 
 function formatDate(value) {
   if (!value) return '—';
-  return new Date(value).toLocaleDateString('es-AR', { day: '2-digit', month: 'short', year: 'numeric' });
+  return new Intl.DateTimeFormat('es-AR', { timeZone: 'UTC', day: '2-digit', month: 'short', year: 'numeric' }).format(new Date(value));
 }
 
 const EMPTY_FORM = { name: '', phone: '', email: '', address: '' };

@@ -23,6 +23,11 @@ function formatDateTime(value) {
   return new Date(value).toLocaleString('es-AR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
+function formatDeliveryDate(value, month = 'short') {
+  if (!value) return '—';
+  return new Intl.DateTimeFormat('es-AR', { timeZone: 'UTC', day: '2-digit', month, year: 'numeric' }).format(new Date(value));
+}
+
 function productPackPrice(product) {
   if (product.packPrice && product.packUnits) return Number(product.packPrice);
   return null;
@@ -370,7 +375,7 @@ export default function SupplierDetailPage() {
                       {supplier.purchases.map((purchase) => (
                         <tr key={purchase.id} className="hover:bg-gray-50 transition-colors">
                           <td className="td text-gray-600">{formatDateTime(purchase.createdAt)}</td>
-                          <td className="td text-gray-600">{purchase.deliveryDate ? new Date(purchase.deliveryDate).toLocaleDateString('es-AR', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}</td>
+                          <td className="td text-gray-600">{formatDeliveryDate(purchase.deliveryDate, 'short')}</td>
                           <td className="td">
                             {purchase.status === 'RECEIVED' ? (
                               <span className="rounded-full bg-green-50 px-3 py-1 text-xs font-700 text-green-700 inline-flex items-center gap-1"><CircleCheckBig size={12} />Recibido</span>
@@ -680,7 +685,7 @@ export default function SupplierDetailPage() {
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="card"><div className="card-body"><div className="text-xs uppercase text-gray-400 font-700">Proveedor</div><div className="text-lg font-800 text-brand-sidebar mt-2">{supplier?.name}</div></div></div>
                 <div className="card"><div className="card-body"><div className="text-xs uppercase text-gray-400 font-700">Fecha del pedido</div><div className="text-lg font-800 text-brand-sidebar mt-2">{formatDateTime(openReceiveModal.createdAt)}</div></div></div>
-                  <div className="card"><div className="card-body"><div className="text-xs uppercase text-gray-400 font-700">Fecha de entrega</div><div className="text-lg font-800 text-brand-sidebar mt-2">{openReceiveModal.deliveryDate ? new Date(openReceiveModal.deliveryDate).toLocaleDateString('es-AR', { day: '2-digit', month: 'long', year: 'numeric' }) : 'Sin definir'}</div></div></div>
+                  <div className="card"><div className="card-body"><div className="text-xs uppercase text-gray-400 font-700">Fecha de entrega</div><div className="text-lg font-800 text-brand-sidebar mt-2">{formatDeliveryDate(openReceiveModal.deliveryDate, 'long')}</div></div></div>
                 <div className="card"><div className="card-body"><div className="text-xs uppercase text-gray-400 font-700">Total</div><div className="text-lg font-800 text-brand-sidebar mt-2">{fmt(openReceiveModal.totalAmount)}</div></div></div>
               </div>
 
