@@ -44,7 +44,7 @@ function mapProductToForm(product) {
   const salePercent = unitCost && salePrice
     ? Math.max(0, Math.round(((Number(salePrice) / Number(unitCost)) - 1) * 100))
     : '';
-  const loadMode = product.packPrice && product.packUnits && product.packCount ? 'pack' : 'unit';
+  const loadMode = product.loadMode === 'pack' || product.packPrice !== null || product.packUnits !== null || product.packCount !== null ? 'pack' : 'unit';
 
   return {
     name: product.name || '',
@@ -122,11 +122,7 @@ export default function StockProductModal({ open, onClose, defaultSearch = '' })
   const { mutate: saveProduct, isPending } = useMutation({
     mutationFn: (data) => {
       if (selectedCatalogProduct) {
-        return api.post(`/products/${selectedCatalogProduct.id}/clone-to-kiosk`, {
-          stock: data.stock,
-          minStock: data.minStock,
-          price: data.salePrice,
-        }).then((r) => r.data);
+        return api.post(`/products/${selectedCatalogProduct.id}/clone-to-kiosk`, data).then((r) => r.data);
       }
 
       return api.post('/products', data).then((r) => r.data);

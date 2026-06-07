@@ -10,7 +10,8 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
-    "db:seed": "node seed.js",
+    "db:seed": "node prisma/seed-global-catalog.js",
+    "db:seed:demo": "node seed.js",
     "db:seed:catalog": "node prisma/seed-global-catalog.js",
     "db:cleanup:duplicates": "node scripts/cleanup-duplicate-products.js",
     "db:studio": "prisma studio"
