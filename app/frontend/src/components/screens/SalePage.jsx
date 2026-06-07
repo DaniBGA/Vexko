@@ -22,6 +22,11 @@ const PAYMENT_ICONS = {
   MIXED: Repeat2,
 };
 
+function toMoney(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 export default function SalePage() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -87,17 +92,23 @@ export default function SalePage() {
     },
   });
 
-  const total = cart.reduce((sum, item) => sum + item.salePrice * item.quantity, 0);
-  const margin = cart.reduce((sum, item) => sum + (item.salePrice - item.costPrice) * item.quantity, 0);
+  const total = cart.reduce((sum, item) => sum + toMoney(item.salePrice) * item.quantity, 0);
+  const margin = cart.reduce((sum, item) => sum + (toMoney(item.salePrice) - toMoney(item.costPrice)) * item.quantity, 0);
   const marginPct = total > 0 ? Math.round((margin / total) * 100) : 0;
 
   function addToCart(product) {
+    const salePrice = toMoney(product.salePrice);
+    if (!salePrice) {
+      toast.error('El producto no tiene precio de venta configurado');
+      return;
+    }
+
     setCart((prev) => {
       const existing = prev.find((i) => i.id === product.id);
       if (existing) {
         return prev.map((i) => (i.id === product.id ? { ...i, quantity: i.quantity + 1 } : i));
       }
-      return [...prev, { ...product, quantity: 1 }];
+      return [...prev, { ...product, salePrice, costPrice: toMoney(product.costPrice), quantity: 1 }];
     });
     setSearch('');
   }
@@ -132,9 +143,9 @@ export default function SalePage() {
       createSale({
         items: cart.map((i) => ({ productId: i.id, quantity: i.quantity })),
         paymentMethod: payment,
-        cashAmount: cashAmount ? parseFloat(cashAmount) : undefined,
-        transferAmount: transferAmount ? parseFloat(transferAmount) : undefined,
-        cardAmount: cardAmount ? parseFloat(cardAmount) : undefined,
+        cashAmount: cashAmount.trim() !== '' ? toMoney(cashAmount) : undefined,
+        transferAmount: transferAmount.trim() !== '' ? toMoney(transferAmount) : undefined,
+        cardAmount: cardAmount.trim() !== '' ? toMoney(cardAmount) : undefined,
       });
     }
 

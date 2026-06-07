@@ -51,6 +51,11 @@ function normalizePaymentMethod(value) {
   return 'CASH';
 }
 
+function buildPurchaseCashFlowDescription(supplierName, notes, purchaseId) {
+  const noteText = notes ? ` — ${String(notes).trim()}` : '';
+  return `[Pedido ${purchaseId}] Compra a proveedor: ${supplierName}${noteText}`;
+}
+
 function parseDateValue(value) {
   const raw = String(value || '').trim();
   if (!raw) return null;
@@ -375,6 +380,7 @@ suppliersRouter.post('/:id/orders', async (req, res, next) => {
     });
 
     const totalAmount = purchaseItems.reduce((sum, item) => sum + item.lineTotal, 0);
+    const cashFlowDescription = buildPurchaseCashFlowDescription(supplier.name, req.body.notes || null, null);
 
     const purchase = await prisma.$transaction(async (tx) => {
       const createdPurchase = await tx.purchase.create({
@@ -402,7 +408,7 @@ suppliersRouter.post('/:id/orders', async (req, res, next) => {
             type: 'EXPENSE',
             amount: totalAmount,
             category: 'Compras',
-            description: `Compra a proveedor: ${supplier.name}${req.body.notes ? ` — ${String(req.body.notes).trim()}` : ''}`,
+            description: buildPurchaseCashFlowDescription(supplier.name, req.body.notes || null, createdPurchase.id),
           },
         });
       }
@@ -562,18 +568,125 @@ suppliersRouter.put('/:supplierId/orders/:purchaseId', async (req, res, next) =>
       ? normalizePaymentMethod(req.body.paymentMethod)
       : purchase.paymentMethod;
 
+    const itemsProvided = Array.isArray(req.body.items);
+    const rawItems = itemsProvided ? req.body.items : [];
+    const items = rawItems
+      .map((item) => ({
+        productId: String(item.productId || '').trim(),
+        quantity: Math.max(1, toInt(item.quantity) || 0),
+        unitCost: toNumber(item.unitCost),
+        packPrice: toNumber(item.packPrice),
+        packUnits: toInt(item.packUnits),
+      }))
+      .filter((item) => item.productId && item.quantity > 0);
+
+    let purchaseItems = null;
+    let totalAmount = purchase.totalAmount;
+
+    if (itemsProvided) {
+      if (!items.length) {
+        return res.status(400).json({ error: 'El pedido debe tener al menos un producto' });
+      }
+
+      const products = await prisma.product.findMany({
+        where: {
+          id: { in: items.map((item) => item.productId) },
+          active: true,
+          OR: [
+            { customerId: kiosk.customerId },
+            { customerId: null },
+          ],
+        },
+        include: {
+          subcategory: { include: { category: true } },
+        },
+      });
+
+      if (products.length !== items.length) {
+        return res.status(400).json({ error: 'Hay productos del pedido que no existen o no están activos' });
+      }
+
+      purchaseItems = items.map((item) => {
+        const product = products.find((current) => current.id === item.productId);
+        const unitCost = resolveUnitCost(item, product);
+
+        return {
+          productId: product.id,
+          quantity: item.quantity,
+          packPrice: item.packPrice,
+          packUnits: item.packUnits,
+          unitCost,
+          lineTotal: unitCost * item.quantity,
+        };
+      });
+
+      totalAmount = purchaseItems.reduce((sum, item) => sum + item.lineTotal, 0);
+    }
+
     const updatedPurchase = await prisma.purchase.update({
       where: { id: purchase.id },
       data: {
         paymentMethod,
         deliveryDate: req.body.deliveryDate !== undefined ? parseDateValue(req.body.deliveryDate) : undefined,
         notes: req.body.notes !== undefined ? req.body.notes || null : undefined,
+        ...(itemsProvided ? {
+          totalAmount,
+          items: {
+            deleteMany: {},
+            create: purchaseItems,
+          },
+        } : {}),
       },
       include: {
         supplier: true,
         items: buildPurchaseItemSelect(),
       },
     });
+
+    if (paymentMethod === 'CASH') {
+      const cashFlowDescription = buildPurchaseCashFlowDescription(supplier.name, updatedPurchase.notes || null, purchase.id);
+      const existingCashFlow = await prisma.cashFlow.findFirst({
+        where: {
+          kioskId: kiosk.id,
+          type: 'EXPENSE',
+          category: 'Compras',
+          OR: [
+            { description: { contains: `[Pedido ${purchase.id}]` } },
+            { description: { contains: supplier.name } },
+          ],
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      if (existingCashFlow) {
+        await prisma.cashFlow.update({
+          where: { id: existingCashFlow.id },
+          data: { amount: totalAmount, description: cashFlowDescription },
+        });
+      } else if (totalAmount > 0) {
+        await prisma.cashFlow.create({
+          data: {
+            kioskId: kiosk.id,
+            type: 'EXPENSE',
+            amount: totalAmount,
+            category: 'Compras',
+            description: cashFlowDescription,
+          },
+        });
+      }
+    } else {
+      await prisma.cashFlow.deleteMany({
+        where: {
+          kioskId: kiosk.id,
+          type: 'EXPENSE',
+          category: 'Compras',
+          OR: [
+            { description: { contains: `[Pedido ${purchase.id}]` } },
+            { description: { contains: supplier.name } },
+          ],
+        },
+      });
+    }
 
     res.json(updatedPurchase);
   } catch (err) {
@@ -601,10 +714,6 @@ suppliersRouter.delete('/:supplierId/orders/:purchaseId', async (req, res, next)
     });
     if (!purchase) throw Object.assign(new Error('Pedido no encontrado'), { statusCode: 404 });
 
-    if (purchase.status === 'RECEIVED') {
-      return res.status(400).json({ error: 'No se puede eliminar un pedido ya recibido' });
-    }
-
     await prisma.$transaction(async (tx) => {
       // Eliminar items del pedido
       await tx.purchaseItem.deleteMany({
@@ -622,7 +731,10 @@ suppliersRouter.delete('/:supplierId/orders/:purchaseId', async (req, res, next)
           where: {
             type: 'EXPENSE',
             category: 'Compras',
-            description: { contains: supplier.name },
+            OR: [
+              { description: { contains: `[Pedido ${purchase.id}]` } },
+              { description: { contains: supplier.name } },
+            ],
             amount: purchase.totalAmount,
           },
         });

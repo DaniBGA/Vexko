@@ -170,6 +170,16 @@ function buildPaymentAmounts(paymentMethod, total, cashAmount, transferAmount, c
   };
 }
 
+function resolveSaleUnitPrice(product) {
+  const inventoryPrice = parseAmount(product?.kioskProducts?.[0]?.price);
+  if (inventoryPrice !== null) return inventoryPrice;
+
+  const basePrice = parseAmount(product?.salePrice);
+  if (basePrice !== null) return basePrice;
+
+  return null;
+}
+
 // GET /api/sales?page=1&limit=10
 salesRouter.get('/', async (req, res, next) => {
   try {
@@ -266,9 +276,18 @@ salesRouter.post('/', async (req, res, next) => {
     }
 
     // Calcular totales
+    const salePrices = new Map();
+    for (const product of products) {
+      const unitPrice = resolveSaleUnitPrice(product);
+      if (unitPrice === null || !Number.isFinite(unitPrice) || unitPrice < 0) {
+        return res.status(400).json({ error: `El producto ${product.name} no tiene precio de venta configurado` });
+      }
+      salePrices.set(product.id, unitPrice);
+    }
+
     const total = items.reduce((sum, item) => {
-      const product = products.find((p) => p.id === item.productId);
-      return sum + parseFloat(product.salePrice) * item.quantity;
+      const unitPrice = salePrices.get(item.productId);
+      return sum + unitPrice * item.quantity;
     }, 0);
 
     // Puntos a sumar (regla activa)
@@ -318,8 +337,7 @@ salesRouter.post('/', async (req, res, next) => {
           pointsEarned,
           items: {
             create: items.map((item) => {
-              const product = products.find((p) => p.id === item.productId);
-              const unitPrice = parseFloat(product.kioskProducts?.[0]?.price ?? product.salePrice);
+              const unitPrice = salePrices.get(item.productId);
               const subtotal = unitPrice * item.quantity;
               return {
                 productId: item.productId,

@@ -186,7 +186,6 @@ npm run db:generate
 npm run db:deploy
 
 # (Opcional) Ejecutar seed
-npm run db:seed
 npm run db:seed:catalog
 ```
 
@@ -674,7 +673,6 @@ npm run db:generate
 npm run db:deploy
 
 # (Opcional) Ejecutar seed
-npm run db:seed
 npm run db:seed:catalog
 ```
 

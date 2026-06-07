@@ -80,6 +80,13 @@ function toInt(value) {
   return parsed === undefined ? undefined : Math.trunc(parsed);
 }
 
+function parseDateOnly(value) {
+  if (!value) return undefined;
+  const [year, month, day] = String(value).split('-').map((part) => Number(part));
+  if (!year || !month || !day) return undefined;
+  return new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+}
+
 function normalizeSearchTerm(value) {
   if (typeof value !== 'string') return '';
   return value.trim();
@@ -468,12 +475,35 @@ productsRouter.post('/:id/clone-to-kiosk', async (req, res, next) => {
 
     const resolvedStock = toInt(req.body.stock);
     const resolvedMinStock = req.body.minStock !== undefined ? toInt(req.body.minStock) : undefined;
-    const resolvedPrice = req.body.price !== undefined ? toNumber(req.body.price) : undefined;
+    const resolvedSalePrice = req.body.salePrice !== undefined ? toNumber(req.body.salePrice) : (req.body.price !== undefined ? toNumber(req.body.price) : undefined);
+    const resolvedPackPrice = req.body.packPrice !== undefined ? toNumber(req.body.packPrice) : undefined;
+    const resolvedPackUnits = req.body.packUnits !== undefined ? toInt(req.body.packUnits) : undefined;
+    const resolvedPackCount = req.body.packCount !== undefined ? toInt(req.body.packCount) : undefined;
+    const resolvedUnitCost = req.body.costPrice !== undefined ? toNumber(req.body.costPrice) : undefined;
+    const resolvedLoadMode = req.body.loadMode === 'unit' ? 'unit' : 'pack';
+    const resolvedExpiresAt = parseDateOnly(req.body.expiresAt);
+
+    await prisma.product.update({
+      where: { id: source.id },
+      data: {
+        loadMode: resolvedLoadMode,
+        basePrice: resolvedPackPrice ?? resolvedSalePrice ?? null,
+        baseCost: resolvedUnitCost ?? null,
+        packPrice: resolvedPackPrice ?? null,
+        packUnits: resolvedPackUnits ?? null,
+        packCount: resolvedPackCount ?? null,
+        costPrice: resolvedUnitCost ?? null,
+        salePrice: resolvedSalePrice ?? null,
+        expiresAt: resolvedExpiresAt ?? null,
+        description: req.body.description !== undefined ? req.body.description : undefined,
+        sku: req.body.sku !== undefined ? (req.body.sku || null) : undefined,
+      },
+    });
 
     await upsertKioskInventory(prisma, kiosk.id, source.id, {
       stock: resolvedStock,
       minStock: resolvedMinStock,
-      price: resolvedPrice,
+      price: resolvedSalePrice,
     });
 
     const linkedProduct = await prisma.product.findUnique({

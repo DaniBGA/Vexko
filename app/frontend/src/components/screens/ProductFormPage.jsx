@@ -47,7 +47,7 @@ function mapProductToForm(product) {
   const salePercent = unitCost && salePrice
     ? Math.max(0, Math.round(((Number(salePrice) / Number(unitCost)) - 1) * 100))
     : '';
-  const loadMode = product.packPrice && product.packUnits && product.packCount ? 'pack' : 'unit';
+  const loadMode = product.loadMode === 'pack' || product.packPrice !== null || product.packUnits !== null || product.packCount !== null ? 'pack' : 'unit';
 
   return {
     name: product.name || '',
@@ -178,11 +178,7 @@ export default function ProductFormPage() {
   const { mutate: save, isPending } = useMutation({
     mutationFn: (data) => {
       if (isNew && catalogId) {
-        return api.post(`/products/${catalogId}/clone-to-kiosk`, {
-          stock: data.stock,
-          minStock: data.minStock,
-          price: data.salePrice,
-        }).then((r) => r.data);
+        return api.post(`/products/${catalogId}/clone-to-kiosk`, data).then((r) => r.data);
       }
 
       return isNew

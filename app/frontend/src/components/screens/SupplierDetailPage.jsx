@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
@@ -81,6 +81,21 @@ function getItemEffectivePackPrice(item) {
   return null;
 }
 
+function mapPurchaseItemToEditor(item) {
+  const packUnits = Number(item.packUnits || item.product.packUnits || 1);
+  const totalUnits = Number(item.quantity || 0);
+  const isPackMode = item.product.loadMode === 'pack';
+
+  return {
+    product: item.product,
+    unitQuantity: isPackMode ? totalUnits % packUnits : totalUnits,
+    packQuantity: isPackMode ? Math.floor(totalUnits / packUnits) : 0,
+    unitCostOverride: item.unitCost !== null && item.unitCost !== undefined ? Number(item.unitCost) : null,
+    packPriceOverride: item.packPrice !== null && item.packPrice !== undefined ? Number(item.packPrice) : null,
+    packUnitsOverride: item.packUnits !== null && item.packUnits !== undefined ? Number(item.packUnits) : null,
+  };
+}
+
 export default function SupplierDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -107,8 +122,17 @@ export default function SupplierDetailPage() {
   const { data: products = [] } = useQuery({
     queryKey: ['supplier-order-products', searchTerm],
     queryFn: () => api.get('/products', { params: { stockView: 1, search: searchTerm || undefined } }).then((r) => unwrapProductsResponse(r.data)),
-    enabled: openOrderModal && searchTerm.length >= 1,
+    enabled: (openOrderModal || Boolean(openEditModal)) && searchTerm.length >= 1,
   });
+
+  useEffect(() => {
+    if (!openEditModal) return;
+    setOrderNotes(openEditModal.notes || '');
+    setDeliveryDate(openEditModal.deliveryDate ? openEditModal.deliveryDate.split('T')[0] : '');
+    setPaymentMethod(openEditModal.paymentMethod || 'CASH');
+    setItems((openEditModal.items || []).map(mapPurchaseItemToEditor));
+    setProductSearch('');
+  }, [openEditModal]);
 
   const { mutate: createOrder, isPending: isCreatingOrder } = useMutation({
     mutationFn: (body) => api.post(`/suppliers/${id}/orders`, body).then((r) => r.data),
@@ -261,10 +285,31 @@ export default function SupplierDetailPage() {
 
   function submitEditOrder(e) {
     e.preventDefault();
+    if (!items.length) {
+      toast.error('Agregá al menos un producto al pedido');
+      return;
+    }
+
+    if (items.some((item) => getItemTotalUnits(item) <= 0)) {
+      toast.error('Cada producto debe tener al menos una unidad o un pack');
+      return;
+    }
+
     updateOrder({
       notes: orderNotes,
       deliveryDate: deliveryDate || null,
       paymentMethod,
+      items: items.map((item) => {
+        const totalUnits = getItemTotalUnits(item);
+        const unitCost = getItemEffectiveUnitCost(item);
+        return {
+          productId: item.product.id,
+          quantity: totalUnits,
+          unitCost,
+          packPrice: item.packPriceOverride ?? null,
+          packUnits: item.packUnitsOverride ?? null,
+        };
+      }),
     });
   }
 
@@ -403,8 +448,7 @@ export default function SupplierDetailPage() {
                                     deleteOrder(purchase.id);
                                   }
                                 }}
-                                disabled={purchase.status === 'RECEIVED'}
-                                className={`btn-outline py-1 px-2 text-xs text-red-600 inline-flex items-center gap-1 ${purchase.status === 'RECEIVED' ? 'opacity-50 cursor-default' : ''}`}
+                                className="btn-outline py-1 px-2 text-xs text-red-600 inline-flex items-center gap-1"
                               >
                                 <Trash2 size={12} />
                                 Borrar
@@ -745,11 +789,11 @@ export default function SupplierDetailPage() {
 
       {openEditModal && supplier && (
         <div className="fixed inset-0 z-50 bg-black/50 px-4 py-6 flex items-center justify-center">
-          <div className="w-full max-w-2xl rounded-2xl bg-white shadow-2xl overflow-hidden max-h-[92vh] flex flex-col">
+          <div className="w-full max-w-6xl rounded-2xl bg-white shadow-2xl overflow-hidden max-h-[92vh] flex flex-col">
             <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
               <div>
                 <div className="text-sm font-700 text-brand-sidebar">Editar pedido</div>
-                <div className="text-xs text-gray-400">Modificá los datos del pedido.</div>
+                <div className="text-xs text-gray-400">Agregá o quitá productos y guardá los cambios del pedido.</div>
               </div>
               <button type="button" onClick={closeEditModal} className="rounded-xl p-3 text-gray-600 hover:bg-gray-100 hover:text-gray-900 transition-colors">
                 <span className="text-3xl leading-none font-700">×</span>
@@ -757,56 +801,195 @@ export default function SupplierDetailPage() {
             </div>
 
             <form onSubmit={submitEditOrder} className="flex-1 overflow-hidden flex flex-col">
-              <div className="flex-1 overflow-y-auto p-5 space-y-4 min-h-0">
-                <div>
-                  <label className="field-label">Fecha de entrega</label>
-                  <input
-                    type="date"
-                    value={deliveryDate}
-                    onChange={(e) => setDeliveryDate(e.target.value)}
-                    className="field-input"
-                  />
-                </div>
+              <div className="flex-1 overflow-hidden grid grid-cols-1 xl:grid-cols-[1.1fr_1fr] gap-0 min-h-0">
+                <div className="border-r border-gray-100 bg-slate-50 flex flex-col min-h-0">
+                  <div className="p-5 border-b border-gray-100 bg-white space-y-3">
+                    <div className="relative">
+                      <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                      <input
+                        value={productSearch}
+                        onChange={(e) => setProductSearch(e.target.value)}
+                        placeholder="Buscar producto por nombre o ID..."
+                        className="field-input input-with-icon w-full"
+                      />
+                    </div>
+                    <div className="rounded-2xl bg-slate-50 border border-slate-200 p-4 text-sm text-gray-600">
+                      Buscá un producto y agregalo al pedido. Si ya estaba cargado, se suma una línea más del mismo producto.
+                    </div>
+                  </div>
 
-                <div>
-                  <label className="field-label">Método de pago</label>
-                  <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)} className="field-input">
-                    {PAYMENT_METHODS.map((method) => (
-                      <option key={method.value} value={method.value}>
-                        {method.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                  <div className="flex-1 overflow-y-auto p-5 space-y-3">
+                    {searchTerm.length >= 1 && filteredProducts.length === 0 ? (
+                      <EmptyState icon={Search} title="Sin resultados" description="Probá con otro nombre o ID de producto." />
+                    ) : (
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                        {filteredProducts.map((product) => (
+                          <button
+                            key={product.id}
+                            type="button"
+                            onClick={() => addItem(product)}
+                            className="text-left rounded-2xl border border-slate-200 bg-white p-4 hover:border-brand-green hover:shadow-sm transition-all"
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <div className="font-800 text-brand-sidebar">{product.name}</div>
+                                <div className="text-xs text-gray-400 mt-1">ID: {product.id}</div>
+                              </div>
+                              <div className="flex flex-col items-end gap-2">
+                                {product.isCustom ? <span className="rounded-full bg-green-50 px-2.5 py-1 text-[11px] font-700 text-green-700">Propio</span> : <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-700 text-slate-700">Global</span>}
+                                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-700 text-slate-700">{product.loadMode === 'unit' ? 'Unidad' : 'Pack'}</span>
+                              </div>
+                            </div>
 
-                <div>
-                  <label className="field-label">Notas</label>
-                  <textarea
-                    value={orderNotes}
-                    onChange={(e) => setOrderNotes(e.target.value)}
-                    placeholder="Notas sobre el pedido..."
-                    className="field-input min-h-24 resize-none"
-                  />
-                </div>
+                            <div className="grid grid-cols-2 gap-2 mt-4 text-xs text-gray-600">
+                              <div><span className="text-gray-400 block">Categoría</span>{product.subcategory?.category?.name || 'Sin categoría'}</div>
+                              <div><span className="text-gray-400 block">Subcategoría</span>{product.subcategory?.name || '—'}</div>
+                              <div><span className="text-gray-400 block">Precio pack</span>{product.packPrice ? fmt(product.packPrice) : '—'}</div>
+                              <div><span className="text-gray-400 block">Precio unidad</span>{fmt(productUnitPrice(product))}</div>
+                            </div>
 
-                <div className="rounded-2xl bg-slate-50 border border-slate-200 p-4 text-sm text-gray-600">
-                  <div className="font-700 text-gray-700 mb-2">Productos del pedido (no editables)</div>
-                  <div className="space-y-2 text-xs">
-                    {openEditModal.items?.map((item) => (
-                      <div key={item.id} className="flex justify-between items-center">
-                        <span>{item.product.name}</span>
-                        <span className="font-700">x{item.quantity}</span>
+                            <div className="mt-4 text-sm font-700 text-brand-sidebar">Agregar al pedido</div>
+                          </button>
+                        ))}
                       </div>
-                    ))}
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex flex-col min-h-0 bg-slate-50">
+                  <div className="card h-full min-h-[74vh] flex flex-col overflow-hidden">
+                    <div className="card-header">
+                      <h3 className="card-title">Pedido editado</h3>
+                      <span className="text-xs text-gray-400">{items.length} productos</span>
+                    </div>
+                    <div className="flex-1 overflow-y-auto p-5 space-y-3 min-h-0">
+                      {items.length === 0 ? (
+                        <EmptyState icon={Package} title="Todavía no agregaste productos" description="Buscá productos a la izquierda y sumalos al pedido." />
+                      ) : (
+                        <div className="space-y-3">
+                          {items.map((item) => (
+                            <div key={item.product.id} className="rounded-2xl border border-slate-200 bg-white p-4">
+                              <div className="flex items-start justify-between gap-3 mb-3">
+                                <div>
+                                  <div className="font-800 text-brand-sidebar">{item.product.name}</div>
+                                  <div className="text-xs text-gray-400 mt-1">ID: {item.product.id}</div>
+                                </div>
+                                <button type="button" onClick={() => removeItem(item.product.id)} className="text-gray-400 hover:text-red-500">
+                                  <X size={16} />
+                                </button>
+                              </div>
+
+                              <div className="grid grid-cols-2 gap-2 text-xs text-gray-600">
+                                <div><span className="text-gray-400 block">Categoría</span>{item.product.subcategory?.category?.name || 'Sin categoría'}</div>
+                                <div><span className="text-gray-400 block">Modo</span>{item.product.loadMode === 'unit' ? 'Por unidad' : 'Por pack'}</div>
+                                <div><span className="text-gray-400 block">Precio pack</span>{item.product.packPrice ? fmt(item.product.packPrice) : '—'}</div>
+                                <div><span className="text-gray-400 block">Precio unidad</span>{fmt(productUnitPrice(item.product))}</div>
+                              </div>
+
+                              {item.product.loadMode === 'pack' ? (
+                                <div className="mt-4 space-y-3">
+                                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                                    <div>
+                                      <div className="text-xs uppercase tracking-wide text-gray-400 mb-1">Packs</div>
+                                      <div className="inline-flex items-center gap-2 rounded-xl bg-slate-50 border border-slate-200 px-2 py-1 w-full justify-between">
+                                        <button type="button" onClick={() => updatePackQty(item.product.id, -1)} className="w-8 h-8 rounded-lg bg-white border border-slate-200">-</button>
+                                        <span className="min-w-8 text-center font-700">{item.packQuantity}</span>
+                                        <button type="button" onClick={() => updatePackQty(item.product.id, 1)} className="w-8 h-8 rounded-lg bg-white border border-slate-200">+</button>
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <div className="text-xs uppercase tracking-wide text-gray-400 mb-1">Unidades sueltas</div>
+                                      <div className="inline-flex items-center gap-2 rounded-xl bg-slate-50 border border-slate-200 px-2 py-1 w-full justify-between">
+                                        <button type="button" onClick={() => updateUnitQty(item.product.id, -1)} className="w-8 h-8 rounded-lg bg-white border border-slate-200">-</button>
+                                        <span className="min-w-8 text-center font-700">{item.unitQuantity}</span>
+                                        <button type="button" onClick={() => updateUnitQty(item.product.id, 1)} className="w-8 h-8 rounded-lg bg-white border border-slate-200">+</button>
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  <div className="flex items-center justify-between text-xs text-gray-500">
+                                    <span>{item.packQuantity} pack{item.packQuantity === 1 ? '' : 's'} de {getItemPackUnits(item)} unidad{getItemPackUnits(item) === 1 ? '' : 'es'} + {item.unitQuantity} unidad{item.unitQuantity === 1 ? '' : 'es'}</span>
+                                    <span>{getItemTotalUnits(item)} unidades totales</span>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="mt-4 flex items-center justify-between">
+                                  <div className="inline-flex items-center gap-2 rounded-xl bg-slate-50 border border-slate-200 px-2 py-1">
+                                    <button type="button" onClick={() => updateUnitQty(item.product.id, -1)} className="w-8 h-8 rounded-lg bg-white border border-slate-200">-</button>
+                                    <span className="min-w-8 text-center font-700">{item.unitQuantity}</span>
+                                    <button type="button" onClick={() => updateUnitQty(item.product.id, 1)} className="w-8 h-8 rounded-lg bg-white border border-slate-200">+</button>
+                                  </div>
+                                  <div className="text-sm font-800 text-brand-sidebar">{fmt(getItemEffectiveUnitCost(item) * getItemTotalUnits(item))}</div>
+                                </div>
+                              )}
+
+                              <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <div>
+                                  <div className="text-xs uppercase tracking-wide text-gray-400 mb-1">Precio unidad (override)</div>
+                                  <input type="number" step="0.01" value={item.unitCostOverride ?? ''} onChange={(e) => updateItemUnitCost(item.product.id, e.target.value)} className="field-input" />
+                                </div>
+                                {item.product.loadMode === 'pack' && (
+                                  <>
+                                    <div>
+                                      <div className="text-xs uppercase tracking-wide text-gray-400 mb-1">Precio pack (override)</div>
+                                      <input type="number" step="0.01" value={item.packPriceOverride ?? ''} onChange={(e) => updateItemPackPrice(item.product.id, e.target.value)} className="field-input" />
+                                    </div>
+                                    <div>
+                                      <div className="text-xs uppercase tracking-wide text-gray-400 mb-1">Unidades por pack</div>
+                                      <input type="number" min="1" step="1" value={item.packUnitsOverride ?? ''} onChange={(e) => updateItemPackUnits(item.product.id, e.target.value)} className="field-input" />
+                                    </div>
+                                  </>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>
 
-              <div className="border-t border-gray-100 px-5 py-4 flex justify-end gap-3 bg-white">
-                <button type="button" onClick={closeEditModal} className="btn-outline">Cancelar</button>
-                <button type="submit" disabled={isUpdatingOrder} className="btn-primary disabled:opacity-60">
-                  {isUpdatingOrder ? 'Guardando...' : 'Guardar cambios'}
-                </button>
+              <div className="border-t border-gray-100 bg-white p-5 space-y-4">
+                <div className="grid grid-cols-1 lg:grid-cols-[0.9fr_1.1fr_0.8fr] gap-3">
+                  <div className="field-group">
+                    <label className="field-label">Fecha de entrega</label>
+                    <input
+                      type="date"
+                      value={deliveryDate}
+                      onChange={(e) => setDeliveryDate(e.target.value)}
+                      className="field-input"
+                    />
+                  </div>
+
+                  <div className="field-group">
+                    <label className="field-label">Notas</label>
+                    <textarea
+                      value={orderNotes}
+                      onChange={(e) => setOrderNotes(e.target.value)}
+                      placeholder="Notas sobre el pedido..."
+                      className="field-input min-h-24 resize-none"
+                    />
+                  </div>
+
+                  <div className="field-group">
+                    <label className="field-label">Método de pago</label>
+                    <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)} className="field-input">
+                      {PAYMENT_METHODS.map((method) => (
+                        <option key={method.value} value={method.value}>
+                          {method.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-3 pt-2">
+                  <button type="button" onClick={closeEditModal} className="btn-outline">Cancelar</button>
+                  <button type="submit" disabled={isUpdatingOrder} className="btn-primary disabled:opacity-60">
+                    {isUpdatingOrder ? 'Guardando...' : 'Guardar cambios'}
+                  </button>
+                </div>
               </div>
             </form>
           </div>

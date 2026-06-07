@@ -10,7 +10,7 @@ async function main() {
     update: {},
     create: {
       name: 'Kiosco Pruebas Local',
-      plan: 'BASE',
+      plan: 'INTERMEDIO',
       email: 'pruebas@vexko.local',
       phone: '0000000000',
       address: 'Sucursal de prueba local',

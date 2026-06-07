@@ -5,6 +5,14 @@ import bcrypt from 'bcryptjs';
 const prisma = new PrismaClient();
 
 async function main() {
+  const databaseUrl = process.env.DATABASE_URL || '';
+  const isProductionTarget = process.env.NODE_ENV === 'production' || /prod\.db/i.test(databaseUrl);
+
+  if (isProductionTarget) {
+    console.log('⚠️ seed.js es solo para pruebas locales. En producción usá npm run db:seed:catalog.');
+    return;
+  }
+
   console.log('🌱 Iniciando seed...');
 
   // ─── Usuario dueño ────────────────────────────────────────────────────────
@@ -128,17 +136,6 @@ async function main() {
 
   // ─── Productos ────────────────────────────────────────────────────────────
   const products = [
-    { name: 'Coca Cola 500ml',      barcode: '7790895001001', subcategoryId: subBebGas.id, supplierId: gonzalez.id, costPrice: 600,  salePrice: 900,  stock: 24, minStock: 10 },
-    { name: 'Coca Cola 1.5L',       barcode: '7790895001023', subcategoryId: subBebGas.id, supplierId: gonzalez.id, costPrice: 900,  salePrice: 1700, stock: 3,  minStock: 10 },
-    { name: 'Pepsi 500ml',          barcode: '7796585002001', subcategoryId: subBebGas.id, supplierId: gonzalez.id, costPrice: 600,  salePrice: 950,  stock: 28, minStock: 10 },
-    { name: 'Fanta 500ml',          barcode: '7790895003001', subcategoryId: subBebGas.id, supplierId: gonzalez.id, costPrice: 580,  salePrice: 900,  stock: 22, minStock: 8  },
-    { name: 'Agua Villavicencio 500ml', barcode: '7790391001234', subcategoryId: subBebAgua.id, supplierId: gonzalez.id, costPrice: 300, salePrice: 600, stock: 30, minStock: 12 },
-    { name: 'Beldent × 1u',         barcode: '7798102001001', subcategoryId: subChicles.id, supplierId: arcor.id, costPrice: 280,  salePrice: 400,  stock: 1,  minStock: 5  },
-    { name: 'Mentitas × 1u',        barcode: '7798102002001', subcategoryId: subChicles.id, supplierId: arcor.id, costPrice: 400,  salePrice: 600,  stock: 9,  minStock: 10 },
-    { name: 'Doritos Clásico',       barcode: '7791137001001', subcategoryId: subSnacks.id, supplierId: gonzalez.id, costPrice: 900,  salePrice: 1400, stock: 15, minStock: 6  },
-    { name: 'Oreo Original',         barcode: '7622210957849', subcategoryId: subCaffe.id, supplierId: arcor.id, costPrice: 800,  salePrice: 1200, stock: 12, minStock: 4  },
-    { name: 'Leche La Serenísima 1L',barcode: '7798032002001', subcategoryId: subLacteos.id, supplierId: serenisima.id, costPrice: 1100, salePrice: 1650, stock: 8, minStock: 12, expiresAt: new Date(Date.now() + 90 * 86400000) },
-    { name: 'Papel A4 resma',        barcode: '7791234000001', subcategoryId: subLib.id, costPrice: 2800, salePrice: 4200, stock: 5, minStock: 3 },
   ];
 
   for (const p of products) {
