@@ -672,11 +672,10 @@ productsRouter.delete('/:id', async (req, res, next) => {
       return res.status(204).end();
     }
 
-    await prisma.product.update({
-      where: { id: req.params.id },
-      data: { active: false },
-    });
-    res.status(204).end();
+    // Producto global del catálogo compartido: no tiene inventario en este
+    // kiosco, así que no hay nada que quitar y no debe desactivarse para
+    // el resto de los clientes.
+    return res.status(404).json({ error: 'Producto no encontrado' });
   } catch (err) {
     next(err);
   }

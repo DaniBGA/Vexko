@@ -265,11 +265,8 @@ salesRouter.post('/', async (req, res, next) => {
       }
     }
 
-    // Calcular totales
-    const total = items.reduce((sum, item) => {
-      const product = products.find((p) => p.id === item.productId);
-      return sum + parseFloat(product.salePrice) * item.quantity;
-    }, 0);
+    // Calcular totales (respeta el precio propio del kiosco si existe)
+    const total = calculateSaleTotal(items, products);
 
     // Puntos a sumar (regla activa)
     let pointsEarned = 0;

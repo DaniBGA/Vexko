@@ -50,9 +50,12 @@ authRouter.get('/me', requireAuth, (req, res) => {
   res.json({ id, name, email, role, kioskId, kiosk });
 });
 
-// POST /api/auth/register  (solo en setup inicial)
-authRouter.post('/register', async (req, res, next) => {
+// POST /api/auth/register  (solo el dueño puede crear cuentas nuevas)
+authRouter.post('/register', requireAuth, async (req, res, next) => {
   try {
+    if (req.user.role !== 'OWNER') {
+      return res.status(403).json({ error: 'Solo el dueño puede crear cuentas' });
+    }
     const { name, email, password, role } = req.body;
     const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) return res.status(409).json({ error: 'Email ya registrado' });
