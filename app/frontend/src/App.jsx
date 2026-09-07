@@ -1,9 +1,10 @@
 // src/App.jsx
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useEffect } from 'react';
 import { useAuthStore } from './store/authStore.js';
 import AppLayout from './components/layout/AppLayout.jsx';
 import LoginPage from './components/screens/LoginPage.jsx';
+import LandingPage from './components/screens/LandingPage.jsx';
 import SalePage from './components/screens/SalePage.jsx';
 import HistoryPage from './components/screens/HistoryPage.jsx';
 import StockPage from './components/screens/StockPage.jsx';
@@ -38,7 +39,12 @@ function AdminPrivateRoute({ children }) {
 
 function PrivateRoute({ children }) {
   const token = useAuthStore((s) => s.token);
-  return token ? children : <Navigate to="/login" replace />;
+  const location = useLocation();
+  if (token) return children;
+  // Anonymous visitors landing on the bare root see the public landing page
+  // instead of being bounced to /login; deep links still redirect to login.
+  if (location.pathname === '/') return <LandingPage />;
+  return <Navigate to="/login" replace />;
 }
 
 export default function App() {
@@ -68,16 +74,16 @@ export default function App() {
         >
           <Route index element={<Navigate to="/venta" replace />} />
           <Route path="venta"                element={<SalePage />} />
-          <Route path="historial"            element={<HistoryPage />} />
+          <Route path="historial"            element={<PlanRoute minPlan={1}><HistoryPage /></PlanRoute>} />
           <Route path="stock"                element={<StockPage />} />
           <Route path="catalogo"            element={<CatalogPage />} />
           <Route path="stock/nuevo"          element={<ProductFormPage />} />
           <Route path="stock/producto/:id"   element={<ProductFormPage />} />
           <Route path="precios"              element={<PricesPage />} />
           <Route path="caja-flujo"           element={<PlanRoute minPlan={1}><CashFlowPage /></PlanRoute>} />
-          <Route path="proveedores"          element={<SuppliersPage />} />
-          <Route path="proveedores/:id"      element={<SupplierDetailPage />} />
-          <Route path="afip"                 element={<AfipPage />} />
+          <Route path="proveedores"          element={<PlanRoute minPlan={1}><SuppliersPage /></PlanRoute>} />
+          <Route path="proveedores/:id"      element={<PlanRoute minPlan={1}><SupplierDetailPage /></PlanRoute>} />
+          <Route path="afip"                 element={<PlanRoute minPlan={1}><AfipPage /></PlanRoute>} />
           <Route path="resultados"           element={<PlanRoute minPlan={1}><ReportsPage /></PlanRoute>} />
           <Route path="caja"                 element={<CashRegisterPage />} />
           <Route path="clientes"             element={<PlanRoute minPlan={2}><ClientsPage /></PlanRoute>} />

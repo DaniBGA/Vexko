@@ -2,10 +2,13 @@ import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { ArrowLeft, Plus, Search, X, Package, Clock3, CircleCheckBig, ChevronLeft, ChevronRight } from 'lucide-react';
+import { ArrowLeft, Plus, Search, X, Package, Clock3, CircleCheckBig, ChevronLeft, ChevronRight, History, FilePlus2, FileDown } from 'lucide-react';
 import { api } from '../../lib/api.js';
 import { unwrapProductsResponse } from '../../lib/response.js';
 import { PageHeader, Spinner, EmptyState, fmt } from '../ui/index.jsx';
+import { downloadPdfReport } from '../../lib/pdf.js';
+import { useAuthStore } from '../../store/authStore.js';
+import { useDebouncedValue } from '../../lib/hooks.js';
 
 const PAYMENT_METHODS = [
   { value: 'CASH', label: 'Efectivo' },
@@ -45,13 +48,24 @@ function getItemTotalUnits(item) {
   return item.unitQuantity;
 }
 
+// El stock real de la sucursal vive en KioskProduct; product.stock es el
+// campo global/legacy y no refleja el stock de esta sucursal en particular.
+function getProductStock(product) {
+  if (Array.isArray(product?.kioskProducts)) {
+    return product.kioskProducts[0]?.stock ?? 0;
+  }
+  return product?.stock ?? 0;
+}
+
 export default function SupplierDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const kioskName = useAuthStore((s) => s.user?.kiosk?.name);
   const [ordersPage, setOrdersPage] = useState(1);
   const ordersLimit = 8;
-  const [openOrderModal, setOpenOrderModal] = useState(false);
+  // null (cerrado) | 'choose' (precargar vs. de cero) | 'previous' (elegir pedido anterior) | 'build' (armar el pedido)
+  const [orderStage, setOrderStage] = useState(null);
   const [openReceiveModal, setOpenReceiveModal] = useState(null);
   const [orderNotes, setOrderNotes] = useState('');
   const [deliveryDate, setDeliveryDate] = useState('');
@@ -60,6 +74,7 @@ export default function SupplierDetailPage() {
   const [productSearch, setProductSearch] = useState('');
 
   const searchTerm = productSearch.trim();
+  const debouncedSearch = useDebouncedValue(searchTerm, 300);
 
   const { data: supplier, isLoading } = useQuery({
     queryKey: ['supplier', id, ordersPage],
@@ -67,17 +82,24 @@ export default function SupplierDetailPage() {
     enabled: !!id,
   });
 
-  const { data: products = [] } = useQuery({
-    queryKey: ['supplier-order-products', searchTerm],
-    queryFn: () => api.get('/products', { params: { stockView: 1, search: searchTerm || undefined } }).then((r) => unwrapProductsResponse(r.data)),
-    enabled: openOrderModal && searchTerm.length >= 1,
+  const { data: productsData } = useQuery({
+    queryKey: ['supplier-order-products', debouncedSearch],
+    // Se limita a 30 resultados: sin tope, cada letra tipeada disparaba una
+    // búsqueda que traía TODO el catálogo global (miles de productos) sin
+    // paginar, lo que hacía sentir la búsqueda muy lenta.
+    queryFn: () => api.get('/products', { params: { stockView: 1, search: debouncedSearch || undefined, limit: 30 } }).then((r) => r.data),
+    enabled: orderStage === 'build' && debouncedSearch.length >= 1,
+    keepPreviousData: true,
   });
+
+  const products = useMemo(() => unwrapProductsResponse(productsData), [productsData]);
+  const productsTotal = productsData?.total ?? products.length;
 
   const { mutate: createOrder, isPending: isCreatingOrder } = useMutation({
     mutationFn: (body) => api.post(`/suppliers/${id}/orders`, body).then((r) => r.data),
     onSuccess: () => {
       toast.success('Pedido guardado');
-      setOpenOrderModal(false);
+      setOrderStage(null);
       setItems([]);
       setOrderNotes('');
       setDeliveryDate('');
@@ -104,7 +126,7 @@ export default function SupplierDetailPage() {
   });
 
   const filteredProducts = useMemo(() => {
-    if (!searchTerm) return [];
+    if (!debouncedSearch) return [];
     const seen = new Set();
     return products.filter((product) => {
       if (product.active === false) return false;
@@ -113,7 +135,76 @@ export default function SupplierDetailPage() {
       seen.add(key);
       return true;
     });
-  }, [products, searchTerm]);
+  }, [products, debouncedSearch]);
+
+  function openNewOrder() {
+    setItems([]);
+    setProductSearch('');
+    setOrderStage((supplier?._count?.purchases || 0) > 0 ? 'choose' : 'build');
+  }
+
+  function closeOrderModal() {
+    setOrderStage(null);
+    setItems([]);
+    setProductSearch('');
+  }
+
+  function prefillFromPurchase(purchase) {
+    const activeItems = (purchase.items || []).filter((item) => item.product?.active !== false);
+    const skipped = (purchase.items?.length || 0) - activeItems.length;
+
+    const nextItems = activeItems.map((item) => {
+      const product = item.product;
+      if (product.loadMode === 'pack') {
+        const packUnits = getPackUnits(product);
+        return {
+          product,
+          packQuantity: Math.floor(item.quantity / packUnits),
+          unitQuantity: item.quantity % packUnits,
+        };
+      }
+      return { product, packQuantity: 0, unitQuantity: item.quantity };
+    });
+
+    setItems(nextItems);
+    setProductSearch('');
+    setOrderStage('build');
+
+    if (skipped > 0) {
+      toast.error(`${skipped} producto${skipped === 1 ? '' : 's'} de ese pedido ya no está${skipped === 1 ? '' : 'n'} disponible${skipped === 1 ? '' : 's'} y no se precargó${skipped === 1 ? '' : 'n'}`);
+    }
+    if (nextItems.length > 0) {
+      toast.success(`Se precargaron ${nextItems.length} producto${nextItems.length === 1 ? '' : 's'} del pedido anterior`);
+    }
+  }
+
+  function exportPurchasePdf(purchase) {
+    const rows = (purchase.items || []).map((item) => [
+      item.product.name,
+      item.product.id,
+      item.product.subcategory?.category?.name || 'Sin categoría',
+      item.product.loadMode === 'unit' ? 'Unidad' : 'Pack',
+      String(item.quantity),
+      fmt(item.unitCost),
+      fmt(item.lineTotal),
+    ]);
+
+    downloadPdfReport({
+      title: `Pedido a ${supplier?.name || 'proveedor'}`,
+      subtitle: formatDateTime(purchase.createdAt),
+      kioskName,
+      meta: [
+        `Estado: ${purchase.status === 'RECEIVED' ? 'Recibido' : 'Pendiente'}`,
+        `Pago: ${purchase.paymentMethod === 'CASH' ? 'Efectivo' : purchase.paymentMethod === 'TRANSFER' ? 'Transferencia' : 'Tarjeta'}`,
+        `Entrega: ${purchase.deliveryDate ? new Date(purchase.deliveryDate).toLocaleDateString('es-AR', { day: '2-digit', month: 'long', year: 'numeric' }) : 'Sin definir'}`,
+        purchase.notes ? `Notas: ${purchase.notes}` : null,
+      ].filter(Boolean),
+      columns: ['Producto', 'ID', 'Categoría', 'Modo', 'Cantidad', 'Costo unitario', 'Subtotal'],
+      rows,
+      summary: [['Total del pedido', fmt(purchase.totalAmount)]],
+      filename: `pedido-${supplier?.name || 'proveedor'}-${new Date(purchase.createdAt).toISOString().slice(0, 10)}.pdf`,
+    });
+  }
 
   function addItem(product) {
     setItems((current) => {
@@ -186,7 +277,7 @@ export default function SupplierDetailPage() {
           <ArrowLeft size={14} />
           Volver
         </button>
-        <button onClick={() => setOpenOrderModal(true)} className="btn-primary inline-flex items-center gap-2">
+        <button onClick={openNewOrder} className="btn-primary inline-flex items-center gap-2">
           <Plus size={14} />
           Nuevo pedido
         </button>
@@ -279,14 +370,24 @@ export default function SupplierDetailPage() {
                           <td className="td font-700">{fmt(purchase.totalAmount)}</td>
                           <td className="td text-gray-500">{purchase.items?.length || 0}</td>
                           <td className="td text-right">
-                            <button
-                              type="button"
-                              onClick={() => purchase.status !== 'RECEIVED' && setOpenReceiveModal(purchase)}
-                              disabled={purchase.status === 'RECEIVED'}
-                              className={`btn-outline py-1 px-3 text-xs ${purchase.status === 'RECEIVED' ? 'opacity-60 cursor-default' : ''}`}
-                            >
-                              {purchase.status === 'RECEIVED' ? 'Recibido' : 'pedido recibido'}
-                            </button>
+                            <div className="flex items-center justify-end gap-2">
+                              <button
+                                type="button"
+                                onClick={() => exportPurchasePdf(purchase)}
+                                title="Descargar PDF del pedido"
+                                className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white p-2 text-gray-600 hover:bg-slate-50"
+                              >
+                                <FileDown size={14} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => purchase.status !== 'RECEIVED' && setOpenReceiveModal(purchase)}
+                                disabled={purchase.status === 'RECEIVED'}
+                                className={`btn-outline py-1 px-3 text-xs ${purchase.status === 'RECEIVED' ? 'opacity-60 cursor-default' : ''}`}
+                              >
+                                {purchase.status === 'RECEIVED' ? 'Recibido' : 'pedido recibido'}
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))}
@@ -327,19 +428,118 @@ export default function SupplierDetailPage() {
         )}
       </div>
 
-      {openOrderModal && supplier && (
+      {orderStage && supplier && (
         <div className="fixed inset-0 z-50 bg-black/50 px-4 py-6 flex items-center justify-center">
           <div className="w-full max-w-6xl rounded-2xl bg-white shadow-2xl overflow-hidden max-h-[92vh] flex flex-col">
             <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
               <div>
                 <div className="text-sm font-700 text-brand-sidebar">Nuevo pedido</div>
-                <div className="text-xs text-gray-400">Elegí productos del catálogo global o propios del local.</div>
+                <div className="text-xs text-gray-400">
+                  {orderStage === 'choose' && '¿Cómo querés armar este pedido?'}
+                  {orderStage === 'previous' && 'Elegí el pedido que querés repetir'}
+                  {orderStage === 'build' && 'Elegí productos del catálogo global o propios del local.'}
+                </div>
               </div>
-              <button type="button" onClick={() => setOpenOrderModal(false)} className="rounded-xl p-3 text-gray-600 hover:bg-gray-100 hover:text-gray-900 transition-colors">
+              <button type="button" onClick={closeOrderModal} className="rounded-xl p-3 text-gray-600 hover:bg-gray-100 hover:text-gray-900 transition-colors">
                 <span className="text-3xl leading-none font-700">×</span>
               </button>
             </div>
 
+            {orderStage === 'choose' && (
+              <div className="p-8 flex-1 overflow-y-auto">
+                <div className="max-w-xl mx-auto space-y-4">
+                  <button
+                    type="button"
+                    onClick={() => setOrderStage('previous')}
+                    className="w-full text-left rounded-2xl border-2 border-slate-200 hover:border-brand-green p-6 flex items-center gap-4 transition-colors"
+                  >
+                    <div className="w-12 h-12 rounded-xl bg-slate-100 flex items-center justify-center flex-shrink-0">
+                      <History size={22} className="text-brand-sidebar" />
+                    </div>
+                    <div>
+                      <div className="font-800 text-brand-sidebar text-base">Precargar productos en base a pedido anterior</div>
+                      <div className="text-sm text-gray-500 mt-1">Elegís un pedido que ya hiciste y arrancás con los mismos productos cargados.</div>
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setItems([]); setOrderStage('build'); }}
+                    className="w-full text-left rounded-2xl border-2 border-slate-200 hover:border-brand-green p-6 flex items-center gap-4 transition-colors"
+                  >
+                    <div className="w-12 h-12 rounded-xl bg-slate-100 flex items-center justify-center flex-shrink-0">
+                      <FilePlus2 size={22} className="text-brand-sidebar" />
+                    </div>
+                    <div>
+                      <div className="font-800 text-brand-sidebar text-base">Pedido de cero</div>
+                      <div className="text-sm text-gray-500 mt-1">Arrancás sin productos cargados y elegís todo desde cero.</div>
+                    </div>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {orderStage === 'previous' && (
+              <div className="p-6 flex-1 overflow-y-auto bg-slate-50">
+                <button type="button" onClick={() => setOrderStage('choose')} className="text-sm font-700 text-brand-sidebar inline-flex items-center gap-1 mb-4">
+                  <ArrowLeft size={14} /> Volver
+                </button>
+
+                {!supplier.purchases?.length ? (
+                  <EmptyState icon={Package} title="Sin pedidos previos" description="Todavía no hay pedidos guardados para precargar." />
+                ) : (
+                  <>
+                    <div className="space-y-3">
+                      {supplier.purchases.map((purchase) => (
+                        <button
+                          key={purchase.id}
+                          type="button"
+                          onClick={() => prefillFromPurchase(purchase)}
+                          className="w-full text-left rounded-2xl border border-slate-200 bg-white p-4 hover:border-brand-green hover:shadow-sm transition-all flex items-center justify-between gap-4"
+                        >
+                          <div>
+                            <div className="font-800 text-brand-sidebar">{formatDateTime(purchase.createdAt)}</div>
+                            <div className="text-xs text-gray-500 mt-1">
+                              {purchase.items?.length || 0} producto{purchase.items?.length === 1 ? '' : 's'} · {fmt(purchase.totalAmount)}
+                            </div>
+                          </div>
+                          {purchase.status === 'RECEIVED' ? (
+                            <span className="rounded-full bg-green-50 px-3 py-1 text-xs font-700 text-green-700 inline-flex items-center gap-1 flex-shrink-0"><CircleCheckBig size={12} />Recibido</span>
+                          ) : (
+                            <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-700 text-amber-700 inline-flex items-center gap-1 flex-shrink-0"><Clock3 size={12} />Pendiente</span>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+
+                    {totalOrdersPages > 1 && (
+                      <div className="flex items-center justify-between gap-3 pt-5 text-sm">
+                        <span className="text-gray-500">Página {ordersPage} de {totalOrdersPages}</span>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            disabled={ordersPage <= 1}
+                            onClick={() => setOrdersPage((current) => Math.max(1, current - 1))}
+                            className="btn-outline px-3 py-1.5 text-xs disabled:opacity-50 inline-flex items-center gap-1"
+                          >
+                            <ChevronLeft size={14} /> Anterior
+                          </button>
+                          <button
+                            type="button"
+                            disabled={ordersPage >= totalOrdersPages}
+                            onClick={() => setOrdersPage((current) => Math.min(totalOrdersPages, current + 1))}
+                            className="btn-outline px-3 py-1.5 text-xs disabled:opacity-50 inline-flex items-center gap-1"
+                          >
+                            Siguiente <ChevronRight size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+
+            {orderStage === 'build' && (
             <form onSubmit={submitOrder} className="flex-1 overflow-hidden flex flex-col">
               <div className="flex-1 overflow-hidden grid grid-cols-1 xl:grid-cols-[1.4fr_0.9fr] gap-0 min-h-0">
                 <div className="border-r border-gray-100 p-5 overflow-y-auto space-y-4 min-h-0">
@@ -357,7 +557,7 @@ export default function SupplierDetailPage() {
                   Cada producto del pedido muestra su ID, categoría, modo de carga, precio por pack, precio por unidad y stock actual para que puedas cargarlo como en el formulario de producto.
                 </div>
 
-                {searchTerm.length >= 1 && filteredProducts.length === 0 ? (
+                {debouncedSearch.length >= 1 && filteredProducts.length === 0 ? (
                   <EmptyState icon={Search} title="Sin resultados" description="Probá con otro nombre o ID de producto." />
                 ) : (
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
@@ -391,6 +591,11 @@ export default function SupplierDetailPage() {
                         <div className="mt-4 text-sm font-700 text-brand-sidebar">Agregar al pedido</div>
                       </button>
                     ))}
+                  </div>
+                )}
+                {productsTotal > filteredProducts.length && (
+                  <div className="text-xs text-gray-400 text-center">
+                    Mostrando {filteredProducts.length} de {productsTotal} resultados — afiná la búsqueda para encontrar el producto más rápido.
                   </div>
                 )}
               </div>
@@ -500,7 +705,7 @@ export default function SupplierDetailPage() {
                       </div>
 
                       <div className="flex justify-end gap-3 pt-2">
-                        <button type="button" onClick={() => setOpenOrderModal(false)} className="btn-outline">Cancelar</button>
+                        <button type="button" onClick={closeOrderModal} className="btn-outline">Cancelar</button>
                         <button type="submit" disabled={isCreatingOrder} className="btn-primary disabled:opacity-60">{isCreatingOrder ? 'Guardando...' : 'Guardar pedido'}</button>
                       </div>
                     </div>
@@ -508,6 +713,7 @@ export default function SupplierDetailPage() {
                 </div>
               </div>
             </form>
+            )}
           </div>
         </div>
       )}
@@ -548,7 +754,8 @@ export default function SupplierDetailPage() {
                     <tbody>
                       {openReceiveModal.items.map((item) => {
                         const product = item.product;
-                        const nextStock = (product.stock || 0) + item.quantity;
+                        const currentStock = getProductStock(product);
+                        const nextStock = currentStock + item.quantity;
                         return (
                           <tr key={item.id} className="hover:bg-gray-50 transition-colors">
                             <td className="td font-700 text-brand-sidebar">{product.name}</td>
@@ -558,7 +765,7 @@ export default function SupplierDetailPage() {
                             <td className="td text-gray-500">{product.packUnits ? `${product.packUnits} u.` : '—'}</td>
                             <td className="td">{product.packPrice ? fmt(product.packPrice) : '—'}</td>
                             <td className="td">{fmt(productUnitPrice(product))}</td>
-                            <td className="td">{product.stock}</td>
+                            <td className="td">{currentStock}</td>
                             <td className="td font-700">{item.quantity}</td>
                             <td className="td font-700 text-green-700">{nextStock}</td>
                           </tr>

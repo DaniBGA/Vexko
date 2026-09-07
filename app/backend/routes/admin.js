@@ -265,6 +265,46 @@ adminRouter.post('/kiosks', async (req, res, next) => {
   }
 });
 
+adminRouter.patch('/kiosks/:id', async (req, res, next) => {
+  try {
+    const kiosk = await prisma.kiosk.findUnique({ where: { id: req.params.id } });
+    if (!kiosk) {
+      return res.status(404).json({ error: 'Sucursal no encontrada' });
+    }
+
+    const data = {};
+    if (req.body.active !== undefined) {
+      data.active = req.body.active === true || req.body.active === 'true';
+    }
+    if (req.body.name !== undefined) {
+      const trimmedName = String(req.body.name).trim();
+      if (!trimmedName) {
+        return res.status(400).json({ error: 'El nombre de la sucursal es obligatorio' });
+      }
+      data.name = trimmedName;
+    }
+    if (req.body.address !== undefined) {
+      data.address = req.body.address?.trim() || null;
+    }
+    if (req.body.phone !== undefined) {
+      data.phone = req.body.phone?.trim() || null;
+    }
+
+    const updated = await prisma.kiosk.update({
+      where: { id: kiosk.id },
+      data,
+      include: {
+        customer: true,
+        user: { select: { id: true, name: true, email: true, role: true, active: true, kioskId: true } },
+      },
+    });
+
+    res.json({ kiosk: updated });
+  } catch (err) {
+    next(err);
+  }
+});
+
 adminRouter.delete('/kiosks/:id', async (req, res, next) => {
   try {
     const scope = await getKioskDeletionScope(req.params.id);
@@ -349,6 +389,61 @@ adminRouter.post('/kiosks/:id/account', async (req, res, next) => {
     });
 
     res.status(201).json({ user });
+  } catch (err) {
+    next(err);
+  }
+});
+
+adminRouter.patch('/kiosks/:id/account', async (req, res, next) => {
+  try {
+    const kiosk = await prisma.kiosk.findUnique({
+      where: { id: req.params.id },
+      include: { user: true },
+    });
+
+    if (!kiosk) {
+      return res.status(404).json({ error: 'Sucursal no encontrada' });
+    }
+
+    if (!kiosk.user) {
+      return res.status(404).json({ error: 'Esta sucursal todavía no tiene una cuenta' });
+    }
+
+    const data = {};
+
+    if (req.body.password !== undefined) {
+      const password = String(req.body.password).trim();
+      if (!password) {
+        return res.status(400).json({ error: 'La contraseña no puede estar vacía' });
+      }
+      data.passwordHash = await bcrypt.hash(password, 10);
+    }
+
+    if (req.body.name !== undefined) {
+      const trimmedName = String(req.body.name).trim();
+      if (trimmedName) {
+        data.name = trimmedName;
+      }
+    }
+
+    if (req.body.email !== undefined && String(req.body.email).trim()) {
+      const normalizedEmail = String(req.body.email).trim().toLowerCase();
+      if (normalizedEmail !== kiosk.user.email) {
+        const existingUser = await prisma.user.findUnique({ where: { email: normalizedEmail } });
+        if (existingUser) {
+          return res.status(409).json({ error: 'Ese email ya está registrado' });
+        }
+        data.email = normalizedEmail;
+      }
+    }
+
+    const updated = await prisma.user.update({
+      where: { id: kiosk.user.id },
+      data,
+      select: { id: true, name: true, email: true, role: true, active: true, kioskId: true },
+    });
+
+    res.json({ user: updated });
   } catch (err) {
     next(err);
   }

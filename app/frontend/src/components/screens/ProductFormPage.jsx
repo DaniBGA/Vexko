@@ -6,6 +6,7 @@ import toast from 'react-hot-toast';
 import { PackagePlus, RotateCcw, Search } from 'lucide-react';
 import { api } from '../../lib/api.js';
 import { unwrapProductsResponse } from '../../lib/response.js';
+import { useDebouncedValue } from '../../lib/hooks.js';
 import { PageHeader, fmt } from '../ui/index.jsx';
 
 const EMPTY_FORM = {
@@ -111,25 +112,30 @@ export default function ProductFormPage() {
   });
 
   const catalogSearchTerm = catalogSearch.trim();
+  const debouncedCatalogSearchTerm = useDebouncedValue(catalogSearchTerm, 300);
   const { data: catalogProducts = [], isFetching: isSearchingCatalog } = useQuery({
-    queryKey: ['catalog-products', catalogSearchTerm],
-    queryFn: () => api.get('/products', { params: { search: catalogSearchTerm || undefined, isCustom: false, global: 1, limit: 8 } }).then((r) => unwrapProductsResponse(r.data)),
+    queryKey: ['catalog-products', debouncedCatalogSearchTerm],
+    queryFn: () => api.get('/products', { params: { search: debouncedCatalogSearchTerm || undefined, isCustom: false, global: 1, limit: 8 } }).then((r) => unwrapProductsResponse(r.data)),
     enabled: isNew,
   });
 
-  // Detectar duplicados mientras se completa el formulario
+  // Detectar duplicados mientras se completa el formulario. Con debounce:
+  // sin esto, cada letra tipeada en el nombre o el ID disparaba una consulta
+  // al servidor.
   const nameSearch = form.name.trim();
   const skuSearch = form.sku.trim();
+  const debouncedNameSearch = useDebouncedValue(nameSearch, 300);
+  const debouncedSkuSearch = useDebouncedValue(skuSearch, 300);
   const { data: dupByName = [] } = useQuery({
-    queryKey: ['product-dup-name', nameSearch],
-    queryFn: () => api.get('/products', { params: { search: nameSearch, isCustom: false, limit: 5 } }).then((r) => unwrapProductsResponse(r.data)),
-    enabled: isNew && nameSearch.length >= 3,
+    queryKey: ['product-dup-name', debouncedNameSearch],
+    queryFn: () => api.get('/products', { params: { search: debouncedNameSearch, isCustom: false, limit: 5 } }).then((r) => unwrapProductsResponse(r.data)),
+    enabled: isNew && debouncedNameSearch.length >= 3,
     keepPreviousData: true,
   });
   const { data: dupBySku = [] } = useQuery({
-    queryKey: ['product-dup-sku', skuSearch],
-    queryFn: () => api.get('/products', { params: { search: skuSearch, isCustom: false, limit: 5 } }).then((r) => unwrapProductsResponse(r.data)),
-    enabled: isNew && skuSearch.length >= 1,
+    queryKey: ['product-dup-sku', debouncedSkuSearch],
+    queryFn: () => api.get('/products', { params: { search: debouncedSkuSearch, isCustom: false, limit: 5 } }).then((r) => unwrapProductsResponse(r.data)),
+    enabled: isNew && debouncedSkuSearch.length >= 1,
     keepPreviousData: true,
   });
 
@@ -150,7 +156,10 @@ export default function ProductFormPage() {
         ...mapProductToForm(selectedCatalogProduct),
         name: selectedCatalogProduct.name || current.name,
         sku: selectedCatalogProduct.sku || selectedCatalogProduct.barcode || current.sku,
-        isCustom: true,
+        // Se está agregando un producto que YA existe en el catálogo global a
+        // este kiosco: no se convierte en "propio", sigue siendo el mismo
+        // producto global, solo se le carga stock/precio de este kiosco.
+        isCustom: false,
       }));
       setModalOpen(true);
     }
@@ -164,7 +173,7 @@ export default function ProductFormPage() {
         ...mapProductToForm(catalogProduct),
         name: catalogProduct.name || current.name,
         sku: catalogProduct.sku || catalogProduct.barcode || current.sku,
-        isCustom: true,
+        isCustom: false,
       }));
       setModalOpen(true);
     }
@@ -176,9 +185,19 @@ export default function ProductFormPage() {
   );
 
   const { mutate: save, isPending } = useMutation({
-    mutationFn: (data) => (isNew
-      ? api.post('/products', data).then((r) => r.data)
-      : api.put(`/products/${id}`, data).then((r) => r.data)),
+    mutationFn: (data) => {
+      if (!isNew) return api.put(`/products/${id}`, data).then((r) => r.data);
+      if (selectedCatalogProduct) {
+        // Ya existe en el catálogo global: solo se le carga stock/precio a
+        // este kiosco, no se clona un producto "propio" nuevo.
+        return api.post(`/products/${selectedCatalogProduct.id}/clone-to-kiosk`, {
+          stock: data.stock,
+          minStock: data.minStock,
+          price: data.salePrice,
+        }).then((r) => r.data);
+      }
+      return api.post('/products', data).then((r) => r.data);
+    },
     onSuccess: () => {
       toast.success(isNew ? 'Producto creado' : 'Producto actualizado');
       queryClient.invalidateQueries({ queryKey: ['products'] });
@@ -188,7 +207,7 @@ export default function ProductFormPage() {
         navigate(`${returnTo}?search=${encodeURIComponent(form.name)}`);
         return;
       }
-      navigate(form.isCustom ? '/stock' : `/catalogo?search=${encodeURIComponent(form.name)}`);
+      navigate('/stock');
     },
   });
 
@@ -341,18 +360,12 @@ export default function ProductFormPage() {
                   <label className="field-label">Descripción (opcional)</label>
                   <textarea value={form.description} onChange={(e) => set('description', e.target.value)} rows={3} className="field-input resize-none" />
                 </div>
-                <div className="field-group">
-                  <label className="field-label">Tipo de producto</label>
-                  <label className="inline-flex items-center gap-2 text-sm text-gray-700">
-                    <input
-                      type="checkbox"
-                      checked={form.isCustom}
-                      onChange={(e) => set('isCustom', e.target.checked)}
-                    />
-                    Producto propio
-                  </label>
-                </div>
-                
+                {selectedCatalogProduct && (
+                  <div className="rounded-lg bg-slate-50 border border-slate-200 px-4 py-3 text-sm text-gray-600">
+                    Este producto ya está en el catálogo global — solo se le va a cargar el stock y el precio de tu local, no se va a duplicar como producto propio.
+                  </div>
+                )}
+
               </div>
             </div>
 

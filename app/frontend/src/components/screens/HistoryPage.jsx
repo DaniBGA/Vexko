@@ -9,6 +9,7 @@ import {
   CircleDollarSign,
   CreditCard,
   Eye,
+  FileDown,
   Landmark,
   Loader2,
   Minus,
@@ -23,6 +24,8 @@ import {
 import { api } from '../../lib/api.js';
 import { unwrapProductsResponse } from '../../lib/response.js';
 import { PageHeader, Spinner, fmt } from '../ui/index.jsx';
+import { downloadPdfReport } from '../../lib/pdf.js';
+import { useAuthStore } from '../../store/authStore.js';
 
 const PAGE_SIZE = 10;
 
@@ -73,11 +76,13 @@ function formatViewSaleItems(items) {
 
 export default function HistoryPage() {
   const queryClient = useQueryClient();
+  const kioskName = useAuthStore((s) => s.user?.kiosk?.name);
   const [page, setPage] = useState(1);
   const [selectedSaleId, setSelectedSaleId] = useState(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editSearch, setEditSearch] = useState('');
   const [editForm, setEditForm] = useState(EMPTY_EDIT_FORM);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
 
   const { data, isLoading, isFetching } = useQuery({
     queryKey: ['sales', page],
@@ -253,6 +258,36 @@ export default function HistoryPage() {
     }
   }
 
+  async function handleExportPdf() {
+    setIsExportingPdf(true);
+    try {
+      const { data: full } = await api.get('/sales', { params: { all: 1 } });
+      const allSales = full.sales || [];
+      const revenueTotal = allSales.reduce((sum, sale) => sum + parseFloat(sale.total), 0);
+      const rows = allSales.map((sale) => [
+        format(new Date(sale.createdAt), 'dd/MM/yyyy HH:mm', { locale: es }),
+        sale.items.map((item) => item.product.name).join(', '),
+        paymentMetaFor(sale.paymentMethod).label,
+        sale.client?.name || '—',
+        fmt(sale.total),
+      ]);
+      downloadPdfReport({
+        title: 'Historial de ventas',
+        subtitle: `Últimos ${full.maxHistoryMonths || 2} meses`,
+        kioskName,
+        meta: [`Total de ventas: ${allSales.length}`],
+        columns: ['Fecha', 'Productos', 'Pago', 'Cliente', 'Total'],
+        rows,
+        summary: [['Ingresos totales', fmt(revenueTotal)]],
+        filename: `historial-ventas-${new Date().toISOString().slice(0, 10)}.pdf`,
+      });
+    } catch {
+      toast.error('No se pudo generar el PDF');
+    } finally {
+      setIsExportingPdf(false);
+    }
+  }
+
   const selectedSale = saleDetailQuery.data;
   const selectedItems = formatViewSaleItems(selectedSale?.items || []);
   const selectedTotal = selectedSale ? parseFloat(selectedSale.total || 0) : 0;
@@ -264,7 +299,17 @@ export default function HistoryPage() {
 
   return (
     <div className="flex flex-col flex-1 overflow-hidden">
-      <PageHeader title="Historial de ventas" />
+      <PageHeader title="Historial de ventas">
+        <button
+          type="button"
+          onClick={handleExportPdf}
+          disabled={isExportingPdf}
+          className="btn-outline inline-flex items-center gap-2 disabled:opacity-60"
+        >
+          <FileDown size={15} />
+          {isExportingPdf ? 'Generando...' : 'Descargar PDF'}
+        </button>
+      </PageHeader>
       <div className="flex-1 overflow-y-auto p-6 space-y-4">
         <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900 flex items-start gap-3">
           <AlertTriangle size={18} className="mt-0.5 flex-shrink-0" />

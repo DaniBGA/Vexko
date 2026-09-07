@@ -43,7 +43,11 @@ function getHistoryCutoff() {
   return cutoff;
 }
 
-function buildPurchaseItemSelect() {
+// `stock`/`minStock` acá son del Product global (legacy); el stock real de
+// esta sucursal vive en KioskProduct. Sin `kioskId` para filtrar esa relación,
+// el front terminaba mostrando el stock global en vez del de la sucursal en
+// la vista previa de "pedido recibido".
+function buildPurchaseItemSelect(kioskId) {
   return {
     select: {
       id: true,
@@ -66,7 +70,11 @@ function buildPurchaseItemSelect() {
           minStock: true,
           expiresAt: true,
           isCustom: true,
+          active: true,
           subcategory: { select: { name: true, category: { select: { name: true } } } },
+          ...(kioskId
+            ? { kioskProducts: { where: { kioskId }, select: { stock: true, minStock: true, price: true } } }
+            : {}),
         },
       },
     },
@@ -86,9 +94,9 @@ function parseDateValue(value) {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
-function buildPurchaseInclude() {
+function buildPurchaseInclude(kioskId) {
   return {
-    items: buildPurchaseItemSelect(),
+    items: buildPurchaseItemSelect(kioskId),
   };
 }
 
@@ -105,13 +113,13 @@ function buildSupplierPaginationResponse(supplier, purchases, total, page, limit
   };
 }
 
-function buildSupplierInclude() {
+function buildSupplierInclude(kioskId) {
   return {
     _count: { select: { products: true, purchases: true } },
     purchases: {
       orderBy: { createdAt: 'desc' },
       take: 1,
-      include: { items: buildPurchaseItemSelect() },
+      include: { items: buildPurchaseItemSelect(kioskId) },
     },
   };
 }
@@ -144,7 +152,7 @@ suppliersRouter.get('/', async (req, res, next) => {
 
     const suppliers = await prisma.supplier.findMany({
       where,
-      include: buildSupplierInclude(),
+      include: buildSupplierInclude(kiosk.id),
       orderBy: { name: 'asc' },
     });
 
@@ -183,7 +191,7 @@ suppliersRouter.get('/:id', async (req, res, next) => {
         orderBy: { createdAt: 'desc' },
         skip,
         take: limit,
-        include: buildPurchaseInclude(),
+        include: buildPurchaseInclude(kiosk.id),
       }),
       prisma.supplier.findFirst({
         where: { id: supplier.id, kioskId: kiosk.id },
@@ -282,7 +290,11 @@ suppliersRouter.post('/:id/orders', async (req, res, next) => {
       where: {
         id: { in: items.map((item) => item.productId) },
         active: true,
-        customerId: kiosk.customerId,
+        // Antes exigía customerId === kiosk.customerId, lo que descartaba
+        // cualquier producto del catálogo global (customerId null): un pedido
+        // con un producto global fallaba siempre con "no existen o no están
+        // activos", aunque el producto se pudiera buscar y agregar sin problema.
+        OR: [{ customerId: kiosk.customerId }, { customerId: null }],
       },
       include: {
         subcategory: { include: { category: true } },
@@ -324,7 +336,7 @@ suppliersRouter.post('/:id/orders', async (req, res, next) => {
         },
         include: {
           supplier: true,
-          items: buildPurchaseItemSelect(),
+          items: buildPurchaseItemSelect(kiosk.id),
         },
       });
 
@@ -422,7 +434,7 @@ suppliersRouter.post('/:supplierId/orders/:purchaseId/receive', async (req, res,
         },
         include: {
           supplier: true,
-          items: buildPurchaseItemSelect(),
+          items: buildPurchaseItemSelect(kiosk.id),
         },
       });
     });

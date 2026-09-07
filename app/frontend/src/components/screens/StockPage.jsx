@@ -1,9 +1,13 @@
 // src/components/screens/StockPage.jsx
 import { useEffect, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { Search, Plus } from 'lucide-react';
+import toast from 'react-hot-toast';
+import { Search, Plus, Barcode, FileDown } from 'lucide-react';
 import { api } from '../../lib/api.js';
+import { unwrapProductsResponse } from '../../lib/response.js';
+import { downloadBarcodeLabelsPdf } from '../../lib/barcodeLabels.js';
+import { useAuthStore } from '../../store/authStore.js';
 import { PageHeader, Badge, Spinner, EmptyState, fmt } from '../ui/index.jsx';
 import { Package } from 'lucide-react';
 
@@ -38,8 +42,172 @@ function expiryLabel(date) {
   return <span className="text-gray-400">{Math.ceil(diff / 30)}m</span>;
 }
 
+/* ================= Imprimir códigos de barra (plan premium) ================= */
+function BarcodeLabelsModal({ onClose }) {
+  const queryClient = useQueryClient();
+  const [onlyPending, setOnlyPending] = useState(true);
+  const [search, setSearch] = useState('');
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [isGenerating, setIsGenerating] = useState(false);
+
+  const sourceQuery = useQuery({
+    queryKey: ['products', 'barcode-labels-source'],
+    queryFn: () => api.get('/products', { params: { stockView: 1, added: 1 } }).then((r) => unwrapProductsResponse(r.data)),
+  });
+
+  const toggleMutation = useMutation({
+    mutationFn: ({ id, printed }) => api.patch(`/products/${id}/barcode-printed`, { printed }).then((r) => r.data),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['products', 'barcode-labels-source'] }),
+    onError: () => toast.error('No se pudo actualizar el estado'),
+  });
+
+  const products = sourceQuery.data || [];
+  const term = search.trim().toLowerCase();
+  const visibleProducts = products
+    .filter((p) => !onlyPending || !p.barcodePrinted)
+    .filter((p) => !term || p.name.toLowerCase().includes(term));
+
+  function toggleSelected(id) {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  function selectAllPending() {
+    setSelectedIds(new Set(visibleProducts.filter((p) => !p.barcodePrinted).map((p) => p.id)));
+  }
+
+  async function handleGenerate() {
+    if (selectedIds.size === 0) {
+      toast.error('Elegí al menos un producto');
+      return;
+    }
+    setIsGenerating(true);
+    try {
+      const { data } = await api.post('/products/barcode-labels', { productIds: Array.from(selectedIds) });
+      const labels = (data.labels || []).map((l) => ({
+        name: l.name,
+        barcode: l.barcode,
+        priceLabel: l.salePrice != null ? fmt(l.salePrice) : '',
+      }));
+      if (!labels.length) {
+        toast.error('Ninguno de los productos elegidos está en tu stock');
+        return;
+      }
+      downloadBarcodeLabelsPdf(labels, { filename: `etiquetas-${new Date().toISOString().slice(0, 10)}.pdf` });
+      toast.success(`${labels.length} etiqueta${labels.length === 1 ? '' : 's'} generada${labels.length === 1 ? '' : 's'}`);
+      setSelectedIds(new Set());
+      queryClient.invalidateQueries({ queryKey: ['products', 'barcode-labels-source'] });
+      queryClient.invalidateQueries({ queryKey: ['products', 'stock-view'] });
+    } catch {
+      toast.error('No se pudo generar el PDF');
+    } finally {
+      setIsGenerating(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/50 px-4 py-6 flex items-center justify-center">
+      <div className="w-full max-w-4xl rounded-2xl bg-white shadow-2xl overflow-hidden max-h-[92vh] flex flex-col">
+        <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
+          <div>
+            <div className="text-sm font-700 text-brand-sidebar">Imprimir códigos de barra</div>
+            <div className="text-xs text-gray-400">Elegí los productos y generá el PDF con las etiquetas</div>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-xl p-3 text-gray-600 hover:bg-gray-100 hover:text-gray-900 transition-colors">
+            <span className="text-3xl leading-none font-700">×</span>
+          </button>
+        </div>
+
+        <div className="p-5 space-y-3 border-b border-gray-100">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="relative flex-1 min-w-48">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Buscar producto..."
+                className="field-input input-with-icon py-2 text-sm w-full"
+              />
+            </div>
+            <label className="inline-flex items-center gap-2 text-sm text-gray-600 whitespace-nowrap">
+              <input type="checkbox" checked={onlyPending} onChange={(e) => setOnlyPending(e.target.checked)} />
+              Solo pendientes de imprimir
+            </label>
+            <button type="button" onClick={selectAllPending} className="btn-outline text-xs px-3 py-1.5 whitespace-nowrap">
+              Seleccionar todos los pendientes
+            </button>
+          </div>
+          <div className="text-xs text-gray-400">
+            {selectedIds.size} producto{selectedIds.size === 1 ? '' : 's'} seleccionado{selectedIds.size === 1 ? '' : 's'}
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto">
+          {sourceQuery.isLoading ? (
+            <Spinner />
+          ) : visibleProducts.length === 0 ? (
+            <EmptyState icon={Barcode} title="Sin productos" description="No hay productos que coincidan con el filtro." />
+          ) : (
+            <table className="w-full">
+              <thead>
+                <tr>
+                  {['', 'Producto', 'Precio', 'Código', 'Estado', ''].map((h) => <th key={h} className="th">{h}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {visibleProducts.map((p) => (
+                  <tr key={p.id} className="hover:bg-gray-50">
+                    <td className="td">
+                      <input type="checkbox" checked={selectedIds.has(p.id)} onChange={() => toggleSelected(p.id)} />
+                    </td>
+                    <td className="td font-600 text-brand-sidebar">{p.name}</td>
+                    <td className="td">{fmt(p.salePrice)}</td>
+                    <td className="td text-xs text-gray-400">{p.barcode || 'Se generará al imprimir'}</td>
+                    <td className="td">
+                      {p.barcodePrinted ? <Badge variant="ok">Impreso</Badge> : <Badge variant="alert">Pendiente</Badge>}
+                    </td>
+                    <td className="td text-right">
+                      <button
+                        type="button"
+                        onClick={() => toggleMutation.mutate({ id: p.id, printed: !p.barcodePrinted })}
+                        disabled={toggleMutation.isPending}
+                        className="btn-outline text-xs px-3 py-1 disabled:opacity-50"
+                      >
+                        Marcar {p.barcodePrinted ? 'pendiente' : 'impreso'}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        <div className="border-t border-gray-100 px-5 py-4 flex justify-end gap-3 bg-white">
+          <button type="button" onClick={onClose} className="btn-outline">Cerrar</button>
+          <button
+            type="button"
+            onClick={handleGenerate}
+            disabled={isGenerating}
+            className="btn-primary disabled:opacity-60 inline-flex items-center gap-2"
+          >
+            <FileDown size={15} />
+            {isGenerating ? 'Generando...' : 'Generar PDF'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function StockPage() {
   const navigate = useNavigate();
+  const kioskPlan = String(useAuthStore((s) => s.user?.kiosk?.customer?.plan) || 'BASE').toUpperCase();
+  const canPrintBarcodes = kioskPlan === 'PREMIUM';
+  const [showBarcodeModal, setShowBarcodeModal] = useState(false);
   const [search, setSearch] = useState('');
   const [productFilter, setProductFilter] = useState('');
   const [page, setPage] = useState(1);
@@ -116,6 +284,12 @@ export default function StockPage() {
           <Plus size={14} className="inline mr-1" />
           Buscar / agregar producto
         </button>
+        {canPrintBarcodes && (
+          <button onClick={() => setShowBarcodeModal(true)} className="btn-outline inline-flex items-center gap-2">
+            <Barcode size={14} />
+            Imprimir códigos de barra
+          </button>
+        )}
       </PageHeader>
 
       <div className="flex-1 overflow-y-auto p-6 space-y-5">
@@ -185,6 +359,8 @@ export default function StockPage() {
           )}
         </div>
       </div>
+
+      {showBarcodeModal && <BarcodeLabelsModal onClose={() => setShowBarcodeModal(false)} />}
     </div>
   );
 }

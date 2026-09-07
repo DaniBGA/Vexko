@@ -1,8 +1,11 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
+import { FileDown } from 'lucide-react';
 import { PageHeader, fmt } from '../ui/index.jsx';
 import { api } from '../../lib/api.js';
+import { downloadPdfReport } from '../../lib/pdf.js';
+import { useAuthStore } from '../../store/authStore.js';
 
 const CATEGORIES = [
   { value: 'Alquiler', label: 'Alquiler' },
@@ -12,12 +15,14 @@ const CATEGORIES = [
 
 export default function CashFlowPage() {
   const queryClient = useQueryClient();
+  const kioskName = useAuthStore((s) => s.user?.kiosk?.name);
   const [page, setPage] = useState(1);
   const limit = 10;
   const [category, setCategory] = useState('ALQUILER');
   const [amount, setAmount] = useState('');
   const [description, setDescription] = useState('');
   const [date, setDate] = useState('');
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
 
   const { data, isLoading } = useQuery({
     queryKey: ['cashflow', 'month', page],
@@ -87,6 +92,46 @@ export default function CashFlowPage() {
     }).catch(() => toast.error('Error borrando gasto'));
   }
 
+  async function handleExportPdf() {
+    setIsExportingPdf(true);
+    try {
+      const { data: full } = await api.get('/cashflow', { params: { period: 'month', all: 1 } });
+      const flows = full.flows || [];
+      const rows = flows.map((f) => {
+        let displayCategory = f.type;
+        let displayConcept = f.description || '';
+        if (f.description) {
+          const parts = f.description.split(' — ');
+          if (parts.length > 1) {
+            displayCategory = parts[0];
+            displayConcept = parts.slice(1).join(' — ');
+          } else displayConcept = parts[0];
+        }
+        return [
+          new Date(f.createdAt).toLocaleDateString('es-AR'),
+          displayCategory,
+          displayConcept || '—',
+          fmt(f.amount),
+        ];
+      });
+
+      downloadPdfReport({
+        title: 'Gastos del mes',
+        subtitle: new Date().toLocaleString('es-AR', { month: 'long', year: 'numeric' }),
+        kioskName,
+        meta: [`Total de gastos: ${flows.length}`],
+        columns: ['Fecha', 'Categoría', 'Descripción', 'Monto'],
+        rows,
+        summary: [['Total gastado', fmt(full.totals?.expense || 0)]],
+        filename: `gastos-${new Date().toISOString().slice(0, 7)}.pdf`,
+      });
+    } catch {
+      toast.error('No se pudo generar el PDF');
+    } finally {
+      setIsExportingPdf(false);
+    }
+  }
+
   return (
     <div className="flex flex-col flex-1 overflow-hidden">
       <PageHeader title="Gastos" />
@@ -122,7 +167,18 @@ export default function CashFlowPage() {
         </div>
 
         <div className="card lg:col-span-2">
-          <div className="card-header"><h3 className="card-title">Gastos del mes</h3></div>
+          <div className="card-header">
+            <h3 className="card-title">Gastos del mes</h3>
+            <button
+              type="button"
+              onClick={handleExportPdf}
+              disabled={isExportingPdf}
+              className="btn-outline inline-flex items-center gap-2 text-xs px-3 py-1.5 disabled:opacity-60"
+            >
+              <FileDown size={13} />
+              {isExportingPdf ? 'Generando...' : 'Descargar PDF'}
+            </button>
+          </div>
           <div className="p-5">
             {isLoading ? <div>Cargando...</div> : (
               <>

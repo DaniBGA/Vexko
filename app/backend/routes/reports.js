@@ -37,12 +37,22 @@ reportsRouter.get('/monthly', async (req, res, next) => {
     const now = new Date();
     const month = req.query.month ? parseInt(req.query.month) - 1 : now.getMonth();
     const year = req.query.year ? parseInt(req.query.year) : now.getFullYear();
-    const from = new Date(year, month, 1);
-    const to = new Date(year, month + 1, 0, 23, 59, 59);
 
     const kioskWhere = kiosk ? { kioskId: kiosk.id } : {};
 
-    const [salesAgg, saleItems, cashFlows, prevSalesAgg] = await Promise.all([
+    // Se trae de una la data de este mes y de los 2 anteriores (para el
+    // comparativo de 3 meses) en un solo Promise.all: antes el mes actual se
+    // calculaba acá arriba y DE NUEVO adentro del loop de comparación, que
+    // además hacía los 3 meses uno por uno (secuencial) en vez de en
+    // paralelo — eran hasta 13 round-trips a la base, la mitad redundantes.
+    const monthWindows = [0, 1, 2].map((i) => {
+      const m = month - i;
+      const y = year + Math.floor(m / 12);
+      const mm = ((m % 12) + 12) % 12;
+      return { monthIndex: mm, year: y, from: new Date(y, mm, 1), to: new Date(y, mm + 1, 0, 23, 59, 59) };
+    });
+
+    const monthsData = await Promise.all(monthWindows.map(({ from, to }) => Promise.all([
       prisma.sale.aggregate({
         _sum: { total: true, cashAmount: true, cardAmount: true, transferAmount: true },
         _count: { id: true },
@@ -50,24 +60,14 @@ reportsRouter.get('/monthly', async (req, res, next) => {
       }),
       prisma.saleItem.findMany({
         where: { sale: { createdAt: { gte: from, lte: to }, ...kioskWhere } },
-        include: { product: { select: { id: true, name: true, costPrice: true, subcategory: { select: { name: true } } } } },
+        include: { product: { select: { id: true, name: true, costPrice: true } } },
       }),
       prisma.cashFlow.findMany({
         where: { type: 'EXPENSE', createdAt: { gte: from, lte: to }, ...kioskWhere },
       }),
-      // Mes anterior
-      prisma.sale.aggregate({
-        _sum: { total: true },
-        _count: { id: true },
-        where: {
-          createdAt: {
-            gte: new Date(year, month - 1, 1),
-            lte: new Date(year, month, 0, 23, 59, 59),
-          },
-          ...kioskWhere,
-        },
-      }),
-    ]);
+    ])));
+
+    const [[salesAgg, saleItems, cashFlows], [prevSalesAgg]] = monthsData;
 
     const revenue = parseFloat(salesAgg._sum.total || 0);
     const totalExpenses = cashFlows.reduce((s, f) => s + parseFloat(f.amount), 0);
@@ -111,32 +111,17 @@ reportsRouter.get('/monthly', async (req, res, next) => {
       revenueGrowth: Math.round(revenueGrowth * 10) / 10,
       topProducts,
       expenseBreakdown: cashFlows,
-      // Last 3 months comparison (current, prev, prev2)
-      threeMonthComparison: await (async () => {
-        const months = [];
-        for (let i = 0; i < 3; i++) {
-          const m = month - i;
-          const y = year + Math.floor(m / 12);
-          const mm = ((m % 12) + 12) % 12; // normalized month index
-          const fromM = new Date(y, mm, 1);
-          const toM = new Date(y, mm + 1, 0, 23, 59, 59);
-
-          const [agg, items, flows] = await Promise.all([
-            prisma.sale.aggregate({ _sum: { total: true }, _count: { id: true }, where: { createdAt: { gte: fromM, lte: toM }, ...kioskWhere } }),
-            prisma.saleItem.findMany({ where: { sale: { createdAt: { gte: fromM, lte: toM }, ...kioskWhere } }, include: { product: { select: { costPrice: true } } } }),
-            prisma.cashFlow.findMany({ where: { type: 'EXPENSE', createdAt: { gte: fromM, lte: toM }, ...kioskWhere } }),
-          ]);
-
-          const rev = parseFloat(agg._sum.total || 0);
-          const cogsMonth = items.reduce((s, it) => s + (parseFloat(it.product?.costPrice || 0) * it.quantity), 0);
-          const expensesMonth = flows.reduce((s, f) => s + parseFloat(f.amount), 0);
-          const gross = rev - cogsMonth;
-          const margin = rev > 0 ? Math.round(((gross / rev) * 100) * 10) / 10 : 0;
-
-          months.push({ month: mm + 1, year: y, revenue: rev, grossProfit: gross, margin, expenses: expensesMonth });
-        }
-        return months;
-      })(),
+      // Last 3 months comparison (current, prev, prev2) — reusa la data que
+      // ya se trajo arriba en vez de volver a consultarla.
+      threeMonthComparison: monthWindows.map(({ monthIndex, year: y }, i) => {
+        const [agg, items, flows] = monthsData[i];
+        const rev = parseFloat(agg._sum.total || 0);
+        const cogsMonth = items.reduce((s, it) => s + (parseFloat(it.product?.costPrice || 0) * it.quantity), 0);
+        const expensesMonth = flows.reduce((s, f) => s + parseFloat(f.amount), 0);
+        const gross = rev - cogsMonth;
+        const margin = rev > 0 ? Math.round(((gross / rev) * 100) * 10) / 10 : 0;
+        return { month: monthIndex + 1, year: y, revenue: rev, grossProfit: gross, margin, expenses: expensesMonth };
+      }),
     });
   } catch (err) { next(err); }
 });

@@ -9,10 +9,14 @@ Deploy target: **Hostinger KVN2 VPS** con Nginx + PM2
 
 ```
 kiosco-app/
-├── backend/          → API REST (Node/Express/Prisma)
-├── frontend/         → SPA React (Vite + Tailwind)
-├── nginx.conf        → Configuración Nginx para VPS
-└── deploy.sh         → Script de despliegue automático
+├── app/
+│   ├── backend/                  → API REST (Node/Express/Prisma)
+│   │   └── ecosystem.config.cjs  → Config de PM2 (producción)
+│   └── frontend/                 → SPA React (Vite + Tailwind)
+├── nginx.conf                    → Configuración Nginx para el VPS
+├── deploy.sh                     → Script de despliegue (backup, build, PM2, health check)
+├── .github/workflows/deploy.yml  → Auto-deploy al pushear a main
+└── docs/                         → Documentación de la app (ver docs/README.md)
 ```
 
 ---
@@ -27,28 +31,28 @@ kiosco-app/
 ### 1. Clonar y configurar variables
 
 ```bash
-git clone <repo> kiosco-app && cd kiosco-app
+git clone https://github.com/DaniBGA/Vexko.git kiosco-app && cd kiosco-app
 
 # Backend
-cp backend/.env.example backend/.env
-# Editar backend/.env con tu configuración local
+cp app/backend/.env.example app/backend/.env
+# Editar app/backend/.env con tu configuración local (necesita un Postgres corriendo)
 
 # Frontend
-cp frontend/.env.example frontend/.env
+cp app/frontend/.env.example app/frontend/.env
 ```
 
 ### 2. Instalar dependencias
 
 ```bash
-cd backend && npm install
+cd app/backend && npm install
 cd ../frontend && npm install
 ```
 
 ### 3. Base de datos
 
 ```bash
-cd backend
-npx prisma migrate dev --name init
+cd app/backend
+npx prisma migrate dev
 npx prisma db seed          # Carga datos de ejemplo
 ```
 
@@ -56,85 +60,32 @@ npx prisma db seed          # Carga datos de ejemplo
 
 ```bash
 # Terminal 1 — Backend
-cd backend && npm run dev    # :3001
+cd app/backend && npm run dev    # :3001
 
 # Terminal 2 — Frontend
-cd frontend && npm run dev   # :5173
+cd app/frontend && npm run dev   # :5173
 ```
 
 ---
 
-## Deploy en Hostinger KVN2
+## Deploy en Hostinger KVM2
 
-### 1. Servidor inicial (una sola vez)
+Guía completa (setup inicial del VPS paso a paso + cómo queda armado el
+auto-deploy con GitHub Actions + backups + rollback): **[docs/GUIA_DEPLOY.md](docs/GUIA_DEPLOY.md)**.
 
-```bash
-# Conectarse por SSH
-ssh root@<TU_IP_VPS>
+Resumen: una vez hecho el setup inicial, cada `git push origin main` deploya
+solo — el workflow `.github/workflows/deploy.yml` se conecta por SSH al VPS
+y corre `deploy.sh`, que hace backup de la base, instala dependencias, migra,
+compila el frontend, reinicia el backend con PM2 (2 instancias en cluster,
+aprovechando los 2 vCPU del KVM2) y verifica que haya quedado arriba antes de
+darse por terminado.
 
-# Instalar Node, PM2, Nginx, PostgreSQL
-curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-apt-get install -y nodejs nginx postgresql postgresql-contrib
-npm install -g pm2
+---
 
-# Crear usuario y base de datos Postgres
-sudo -u postgres psql -c "CREATE USER kiosco WITH PASSWORD 'CAMBIA_ESTO';"
-sudo -u postgres psql -c "CREATE DATABASE kiosco_db OWNER kiosco;"
-```
+## Documentación
 
-### 2. Subir el proyecto
-
-```bash
-# Desde tu máquina local
-scp -r kiosco-app root@<TU_IP_VPS>:/var/www/
-
-# O usar git en el servidor
-cd /var/www && git clone <repo> kiosco-app
-```
-
-### 3. Configurar variables de entorno en el servidor
-
-```bash
-nano /var/www/kiosco-app/backend/.env
-# Completar con los datos reales de producción
-```
-
-### 4. Build y migraciones
-
-```bash
-cd /var/www/kiosco-app/backend
-npm install --production
-npx prisma migrate deploy
-npx prisma db seed          # Solo primera vez
-
-cd /var/www/kiosco-app/frontend
-npm install
-npm run build               # Genera dist/
-```
-
-### 5. PM2 para el backend
-
-```bash
-cd /var/www/kiosco-app/backend
-pm2 start ecosystem.config.js
-pm2 save
-pm2 startup                  # Seguir instrucciones que imprime
-```
-
-### 6. Nginx
-
-```bash
-cp /var/www/kiosco-app/nginx.conf /etc/nginx/sites-available/kiosco
-ln -s /etc/nginx/sites-available/kiosco /etc/nginx/sites-enabled/
-nginx -t && systemctl reload nginx
-```
-
-### 7. SSL con Certbot (opcional pero recomendado)
-
-```bash
-apt install certbot python3-certbot-nginx -y
-certbot --nginx -d tu-dominio.com
-```
+Toda la documentación de la app (estructura de datos, multi-negocio, deploy,
+pendientes para futuras releases) vive en **[docs/](docs/README.md)**.
 
 ---
 

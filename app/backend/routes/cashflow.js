@@ -9,8 +9,11 @@ cashFlowRouter.use(requireAuth);
 cashFlowRouter.get('/', async (req, res, next) => {
   try {
     const { period = 'month' } = req.query;
-    const page = Math.max(1, parseInt(req.query.page || '1', 10) || 1);
-    const limit = Math.min(20, Math.max(1, parseInt(req.query.limit || '10', 10) || 10));
+    const unbounded = req.query.all === '1';
+    const page = unbounded ? 1 : Math.max(1, parseInt(req.query.page || '1', 10) || 1);
+    const limit = unbounded
+      ? 500
+      : Math.min(20, Math.max(1, parseInt(req.query.limit || '10', 10) || 10));
     const now = new Date();
     let from = new Date(now.getFullYear(), now.getMonth(), 1);
     if (period === 'today') from = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -88,16 +91,25 @@ cashFlowRouter.post('/', async (req, res, next) => {
 
 cashFlowRouter.delete('/:id', async (req, res, next) => {
   try {
-    await prisma.cashFlow.delete({ where: { id: req.params.id } });
+    const kiosk = await resolveRequestKiosk(req);
+    if (!kiosk) return res.status(404).json({ error: 'Gasto no encontrado' });
+    const existing = await prisma.cashFlow.findFirst({ where: { id: req.params.id, kioskId: kiosk.id } });
+    if (!existing) return res.status(404).json({ error: 'Gasto no encontrado' });
+    await prisma.cashFlow.delete({ where: { id: existing.id } });
     res.status(204).end();
   } catch (err) { next(err); }
 });
 
 cashFlowRouter.put('/:id', async (req, res, next) => {
   try {
+    const kiosk = await resolveRequestKiosk(req);
+    if (!kiosk) return res.status(404).json({ error: 'Gasto no encontrado' });
+    const existing = await prisma.cashFlow.findFirst({ where: { id: req.params.id, kioskId: kiosk.id } });
+    if (!existing) return res.status(404).json({ error: 'Gasto no encontrado' });
+
     const { amount, concept, category, date } = req.body;
     const flow = await prisma.cashFlow.update({
-      where: { id: req.params.id },
+      where: { id: existing.id },
       data: {
         amount: amount !== undefined ? parseFloat(amount) : undefined,
         description: (category || concept) ? [category, concept].filter(Boolean).join(' — ') : undefined,

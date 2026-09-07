@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -20,6 +20,7 @@ model Customer {
   address   String?
   kiosks    Kiosk[]
   products  Product[]
+  categories Category[]
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
 }
@@ -39,6 +40,8 @@ model Kiosk {
   sales       Sale[]
   suppliers   Supplier[]
   cashFlows   CashFlow[]
+  employees   Employee[]
+  loyaltyRules LoyaltyRule[]
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
 
@@ -46,16 +49,25 @@ model Kiosk {
   @@index([customerId])
 }
 
+// customerId null = categoría global/compartida (la que arma el catálogo
+// global de productos, común a todos los clientes). Una categoría con
+// customerId es propia de ESE cliente y no la ve ningún otro — antes esto
+// era una única lista global sin dueño, así que cualquier cliente que creara
+// una categoría nueva la veían todos los demás.
 model Category {
   id          String       @id @default(cuid())
-  name        String       @unique
+  name        String
   description String?
+  customerId  String?
+  customer    Customer?    @relation(fields: [customerId], references: [id], onDelete: Cascade)
   subcategories Subcategory[]
   products    Product[]
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 
+  @@unique([customerId, name])
   @@index([name])
+  @@index([customerId])
 }
 
 model Subcategory {
@@ -114,16 +126,17 @@ model Product {
 }
 
 model KioskProduct {
-  id         String   @id @default(cuid())
-  kioskId    String
-  productId  String
-  stock      Int      @default(0)
-  minStock   Int      @default(0)
-  price      Float?
-  kiosk      Kiosk    @relation(fields: [kioskId], references: [id], onDelete: Cascade)
-  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id             String   @id @default(cuid())
+  kioskId        String
+  productId      String
+  stock          Int      @default(0)
+  minStock       Int      @default(0)
+  price          Float?
+  barcodePrinted Boolean  @default(false)
+  kiosk          Kiosk    @relation(fields: [kioskId], references: [id], onDelete: Cascade)
+  product        Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   @@unique([kioskId, productId])
   @@index([kioskId])
@@ -154,6 +167,7 @@ model Sale {
   @@index([kioskId])
   @@index([userId])
   @@index([date])
+  @@index([createdAt])
   @@index([kioskId, createdAt])
   @@index([userId, createdAt])
   @@index([paymentMethod, createdAt])
@@ -263,12 +277,20 @@ model Client {
   @@index([kioskId])
 }
 
+// La regla de fidelización es por sucursal: antes era una única fila global
+// (id fijo en 1) compartida por todos los clientes/sucursales del sistema,
+// así que cambiarla desde un kiosco cambiaba los puntos de TODOS los demás.
 model LoyaltyRule {
-  id               Int     @id @default(1)
-  amountPerPoint   Float
+  id                String   @id @default(cuid())
+  kioskId           String
+  kiosk             Kiosk    @relation(fields: [kioskId], references: [id], onDelete: Cascade)
+  amountPerPoint    Float
   pointsForDiscount Int
-  discountAmount   Float
-  active           Boolean @default(true)
+  discountAmount    Float
+  active            Boolean  @default(true)
+  createdAt         DateTime @default(now())
+
+  @@index([kioskId])
 }
 
 model PointRedemption {
@@ -312,6 +334,7 @@ model Purchase {
 
   @@index([supplierId, createdAt])
   @@index([status])
+  @@index([createdAt])
 }
 
 model PurchaseItem {
@@ -341,8 +364,28 @@ model CashRegister {
   openedAt       DateTime @default(now())
   closedAt       DateTime?
   user           User     @relation(fields: [userId], references: [id])
+  employeeId     String?
+  employee       Employee? @relation(fields: [employeeId], references: [id])
 
   @@index([status])
   @@index([openedAt])
   @@index([userId])
+  @@index([employeeId])
+}
+
+// Empleado de una sucursal: no tiene cuenta propia en el sistema, solo una
+// clave numérica que el dueño le genera para poder abrir la caja e
+// identificar quién hizo el turno.
+model Employee {
+  id            String         @id @default(cuid())
+  kioskId       String
+  kiosk         Kiosk          @relation(fields: [kioskId], references: [id], onDelete: Cascade)
+  name          String
+  pinHash       String
+  active        Boolean        @default(true)
+  cashRegisters CashRegister[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  @@index([kioskId])
 }

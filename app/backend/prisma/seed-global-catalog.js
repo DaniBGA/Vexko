@@ -12,11 +12,9 @@ function normalizeText(value) {
 }
 
 async function upsertCategory(name) {
-  return prisma.category.upsert({
-    where: { name },
-    update: {},
-    create: { name },
-  });
+  const existing = await prisma.category.findFirst({ where: { customerId: null, name } });
+  if (existing) return existing;
+  return prisma.category.create({ data: { name, customerId: null } });
 }
 
 async function upsertSubcategory(name, categoryId) {
@@ -35,9 +33,18 @@ async function main() {
     throw new Error('catalog-products.json must contain a JSON array');
   }
 
+  // Sin esto, correr el script de nuevo insertaba una copia entera del
+  // catálogo cada vez (createMany no revisa si el producto ya existe),
+  // duplicando y hasta sextuplicando productos en el catálogo global.
+  const existingNames = new Set(
+    (await prisma.product.findMany({ where: { customerId: null }, select: { name: true } }))
+      .map((p) => p.name)
+  );
+
   const categoryCache = new Map();
   const subcategoryCache = new Map();
   const productRows = [];
+  let skipped = 0;
 
   for (const entry of catalog) {
     const categoryName = normalizeText(entry?.categoria);
@@ -47,6 +54,12 @@ async function main() {
     if (!categoryName || !subcategoryName || !productName) {
       continue;
     }
+
+    if (existingNames.has(productName)) {
+      skipped += 1;
+      continue;
+    }
+    existingNames.add(productName); // también evita duplicados dentro del propio archivo
 
     let category = categoryCache.get(categoryName);
     if (!category) {
@@ -74,9 +87,11 @@ async function main() {
     });
   }
 
-  await prisma.product.createMany({ data: productRows });
+  if (productRows.length > 0) {
+    await prisma.product.createMany({ data: productRows });
+  }
 
-  console.log(`✓ Catálogo global importado: ${productRows.length} productos`);
+  console.log(`✓ Catálogo global importado: ${productRows.length} productos nuevos (${skipped} ya existían, sin duplicar)`);
 }
 
 main()

@@ -45,13 +45,21 @@ async function main() {
   console.log('✓ Kiosko:', kiosk.name);
 
   // ─── Categorías ───────────────────────────────────────────────────────────
+  // customerId: null → categorías globales, las que arma el catálogo global
+  // (compartidas entre todos los clientes, a diferencia de las que un cliente
+  // crea para sí mismo).
+  async function upsertGlobalCategory(name) {
+    const existing = await prisma.category.findFirst({ where: { customerId: null, name } });
+    if (existing) return existing;
+    return prisma.category.create({ data: { name, customerId: null } });
+  }
   const categories = await Promise.all([
-    prisma.category.upsert({ where: { name: 'Bebidas' }, update: {}, create: { name: 'Bebidas' } }),
-    prisma.category.upsert({ where: { name: 'Golosinas' }, update: {}, create: { name: 'Golosinas' } }),
-    prisma.category.upsert({ where: { name: 'Snacks' }, update: {}, create: { name: 'Snacks' } }),
-    prisma.category.upsert({ where: { name: 'Lácteos' }, update: {}, create: { name: 'Lácteos' } }),
-    prisma.category.upsert({ where: { name: 'Librería' }, update: {}, create: { name: 'Librería' } }),
-    prisma.category.upsert({ where: { name: 'Cigarrillos' }, update: {}, create: { name: 'Cigarrillos' } }),
+    upsertGlobalCategory('Bebidas'),
+    upsertGlobalCategory('Golosinas'),
+    upsertGlobalCategory('Snacks'),
+    upsertGlobalCategory('Lácteos'),
+    upsertGlobalCategory('Librería'),
+    upsertGlobalCategory('Cigarrillos'),
   ]);
   console.log('✓ Categorías:', categories.map((c) => c.name).join(', '));
 
@@ -92,21 +100,27 @@ async function main() {
   });
 
   // ─── Proveedores ──────────────────────────────────────────────────────────
+  // Con kioskId: antes quedaban sin sucursal asociada y no aparecían en
+  // "Proveedores" de ningún kiosco.
   const gonzalez = await prisma.supplier.upsert({
-    where: { name: 'Distribuidora González' }, update: {},
-    create: { name: 'Distribuidora González', phone: '249-555-1234' },
+    where: { name: 'Distribuidora González' }, update: { kioskId: kiosk.id },
+    create: { name: 'Distribuidora González', phone: '249-555-1234', kioskId: kiosk.id },
   });
   const arcor = await prisma.supplier.upsert({
-    where: { name: 'Arcor' }, update: {},
-    create: { name: 'Arcor', phone: '011-5555-1234', email: 'juan@arcor.com' },
+    where: { name: 'Arcor' }, update: { kioskId: kiosk.id },
+    create: { name: 'Arcor', phone: '011-5555-1234', email: 'juan@arcor.com', kioskId: kiosk.id },
   });
   const serenisima = await prisma.supplier.upsert({
-    where: { name: 'La Serenísima' }, update: {},
-    create: { name: 'La Serenísima', phone: '0800-333-5544' },
+    where: { name: 'La Serenísima' }, update: { kioskId: kiosk.id },
+    create: { name: 'La Serenísima', phone: '0800-333-5544', kioskId: kiosk.id },
   });
   console.log('✓ Proveedores creados');
 
   // ─── Productos ────────────────────────────────────────────────────────────
+  // Son ejemplos con precio y proveedor propios de "Sucursal Centro", así que
+  // se cargan como productos propios (isCustom) de ese cliente — no como
+  // catálogo global, que es compartido por todos los clientes y no debe
+  // llevar precio ni proveedor de nadie en particular.
   const products = [
     { name: 'Coca Cola 500ml',      barcode: '7790895001001', subcategoryId: subBebGas.id, supplierId: gonzalez.id, costPrice: 600,  salePrice: 900,  stock: 24, minStock: 10 },
     { name: 'Coca Cola 1.5L',       barcode: '7790895001023', subcategoryId: subBebGas.id, supplierId: gonzalez.id, costPrice: 900,  salePrice: 1700, stock: 3,  minStock: 10 },
@@ -122,19 +136,36 @@ async function main() {
   ];
 
   for (const p of products) {
-    await prisma.product.upsert({
+    const { stock, minStock, ...productData } = p;
+    const product = await prisma.product.upsert({
       where: { barcode: p.barcode },
-      update: {},
-      create: { ...p, costPrice: p.costPrice, salePrice: p.salePrice },
+      update: {
+        isCustom: true,
+        customerId: customer.id,
+        subcategoryId: p.subcategoryId,
+        supplierId: p.supplierId,
+        costPrice: p.costPrice,
+        salePrice: p.salePrice,
+        expiresAt: p.expiresAt || null,
+      },
+      create: { ...productData, isCustom: true, customerId: customer.id, stock: 0, minStock: 0 },
+    });
+
+    await prisma.kioskProduct.upsert({
+      where: { kioskId_productId: { kioskId: kiosk.id, productId: product.id } },
+      update: { stock, minStock, price: p.salePrice },
+      create: { kioskId: kiosk.id, productId: product.id, stock, minStock, price: p.salePrice },
     });
   }
   console.log('✓ Productos creados');
 
-  // ─── Regla de fidelización ────────────────────────────────────────────────
-  await prisma.loyaltyRule.upsert({
-    where: { id: 1 }, update: {},
-    create: { id: 1, amountPerPoint: 100, pointsForDiscount: 50, discountAmount: 500 },
-  });
+  // ─── Regla de fidelización (por sucursal) ─────────────────────────────────
+  const existingLoyaltyRule = await prisma.loyaltyRule.findFirst({ where: { kioskId: kiosk.id } });
+  if (!existingLoyaltyRule) {
+    await prisma.loyaltyRule.create({
+      data: { kioskId: kiosk.id, amountPerPoint: 100, pointsForDiscount: 50, discountAmount: 500 },
+    });
+  }
 
   // ─── Clientes de ejemplo ──────────────────────────────────────────────────
   await prisma.client.upsert({
@@ -146,8 +177,46 @@ async function main() {
     create: { kioskId: kiosk.id, name: 'María Rodríguez', phone: '2494001002', points: -20 + 50, totalSpent: 28500 },
   });
 
+  // ─── Cuentas demo por plan (una por cada nivel de suscripción) ────────────
+  const planAccounts = [
+    { plan: 'BASE', customerName: 'Demo Plan Base', kioskName: 'Sucursal Base', email: 'base@kiosco.com', password: 'base123' },
+    { plan: 'INTERMEDIO', customerName: 'Demo Plan Intermedio', kioskName: 'Sucursal Intermedio', email: 'intermedio@kiosco.com', password: 'intermedio123' },
+    { plan: 'PREMIUM', customerName: 'Demo Plan Premium', kioskName: 'Sucursal Premium', email: 'premium@kiosco.com', password: 'premium123' },
+  ];
+
+  for (const acc of planAccounts) {
+    const planCustomer = await prisma.customer.upsert({
+      where: { name: acc.customerName },
+      update: { plan: acc.plan },
+      create: { name: acc.customerName, plan: acc.plan },
+    });
+
+    const planKiosk = await prisma.kiosk.upsert({
+      where: { customerId_name: { customerId: planCustomer.id, name: acc.kioskName } },
+      update: { active: true },
+      create: { name: acc.kioskName, customerId: planCustomer.id, active: true },
+    });
+
+    const planPasswordHash = await bcrypt.hash(acc.password, 10);
+    await prisma.user.upsert({
+      where: { email: acc.email },
+      update: { active: true, kioskId: planKiosk.id },
+      create: {
+        name: acc.kioskName,
+        email: acc.email,
+        passwordHash: planPasswordHash,
+        role: 'KIOSK',
+        kioskId: planKiosk.id,
+      },
+    });
+  }
+  console.log('✓ Cuentas demo por plan creadas (base@kiosco.com, intermedio@kiosco.com, premium@kiosco.com)');
+
   console.log('\n✅ Seed completado!');
-  console.log('   Login: admin@kiosco.com / kiosco123');
+  console.log('   Login admin: admin@kiosco.com / kiosco123');
+  console.log('   Login plan Base:        base@kiosco.com / base123');
+  console.log('   Login plan Intermedio:  intermedio@kiosco.com / intermedio123');
+  console.log('   Login plan Premium:     premium@kiosco.com / premium123');
 }
 
 main()

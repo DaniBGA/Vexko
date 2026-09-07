@@ -8,6 +8,7 @@ salesRouter.use(requireAuth);
 
 const MAX_HISTORY_MONTHS = 2;
 const DEFAULT_HISTORY_LIMIT = 10;
+const MAX_EXPORT_LIMIT = 500;
 const SALES_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 let lastSalesCleanupAt = 0;
@@ -31,10 +32,11 @@ export async function cleanupOldSales(force = false) {
   });
 }
 
-function normalizeLimit(limit) {
+function normalizeLimit(limit, { unbounded } = {}) {
+  const cap = unbounded ? MAX_EXPORT_LIMIT : DEFAULT_HISTORY_LIMIT;
   const parsed = parseInt(limit, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_HISTORY_LIMIT;
-  return Math.min(parsed, DEFAULT_HISTORY_LIMIT);
+  if (!Number.isFinite(parsed) || parsed <= 0) return unbounded ? cap : DEFAULT_HISTORY_LIMIT;
+  return Math.min(parsed, cap);
 }
 
 function normalizePage(page) {
@@ -173,9 +175,10 @@ function buildPaymentAmounts(paymentMethod, total, cashAmount, transferAmount, c
 // GET /api/sales?page=1&limit=10
 salesRouter.get('/', async (req, res, next) => {
   try {
-    const { page = 1, limit = DEFAULT_HISTORY_LIMIT } = req.query;
-    const safeLimit = normalizeLimit(limit);
-    const requestedPage = normalizePage(page);
+    const { page = 1, limit, all } = req.query;
+    const unbounded = all === '1';
+    const safeLimit = normalizeLimit(limit, { unbounded });
+    const requestedPage = unbounded ? 1 : normalizePage(page);
     const cutoff = getHistoryCutoff();
     const kiosk = await resolveRequestKiosk(req);
 
@@ -272,7 +275,7 @@ salesRouter.post('/', async (req, res, next) => {
     let pointsEarned = 0;
     let loyaltyRule = null;
     if (nextClientId) {
-      loyaltyRule = await prisma.loyaltyRule.findFirst({ where: { active: true } });
+      loyaltyRule = await prisma.loyaltyRule.findFirst({ where: { kioskId: kiosk.id, active: true } });
       if (loyaltyRule) {
         pointsEarned = Math.floor(total / parseFloat(loyaltyRule.amountPerPoint));
       }
@@ -486,7 +489,7 @@ salesRouter.put('/:id', async (req, res, next) => {
 
       let pointsEarned = 0;
       if (nextClientId) {
-        const loyaltyRule = await tx.loyaltyRule.findFirst({ where: { active: true } });
+        const loyaltyRule = await tx.loyaltyRule.findFirst({ where: { kioskId: kiosk.id, active: true } });
         if (loyaltyRule) {
           pointsEarned = Math.floor(total / parseFloat(loyaltyRule.amountPerPoint));
         }
@@ -506,7 +509,6 @@ salesRouter.put('/:id', async (req, res, next) => {
           pointsEarned,
         },
       });
-                const loyaltyRule = await tx.loyaltyRule.findFirst({ where: { active: true } });
       await tx.saleItem.deleteMany({ where: { saleId } });
 
       for (const item of items) {

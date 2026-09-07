@@ -1,0 +1,216 @@
+/* Styles for the public beta landing page (marketing site) */
+
+.landing {
+  --lp-navy: #1c2050;
+  --lp-navy-deep: #14173b;
+  --lp-green: #4caf82;
+  --lp-green-dark: #2e7d32;
+  --lp-bg: #f5f6fa;
+  overflow-x: clip;
+  background: var(--lp-bg);
+}
+
+.landing * {
+  box-sizing: border-box;
+}
+
+/* ---------- Parallax layers ---------- */
+.lp-parallax-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  will-change: transform;
+  transition: transform 0.05s linear;
+}
+
+.lp-blob {
+  position: absolute;
+  border-radius: 999px;
+  filter: blur(60px);
+  opacity: 0.55;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lp-parallax-layer {
+    transition: none;
+  }
+  .lp-animate,
+  .lp-mock-screen,
+  .lp-cart-row,
+  .lp-cursor {
+    animation: none !important;
+  }
+}
+
+/* ---------- Reveal on scroll ---------- */
+.lp-reveal {
+  opacity: 0;
+  transform: translateY(28px);
+  transition: opacity 0.7s ease, transform 0.7s ease;
+}
+.lp-reveal.lp-in {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* ---------- Hero ---------- */
+.lp-hero-grid {
+  background-image: radial-gradient(rgba(255, 255, 255, 0.12) 1px, transparent 1px);
+  background-size: 26px 26px;
+}
+
+.lp-badge-pulse {
+  animation: lpPulse 2.4s ease-in-out infinite;
+}
+@keyframes lpPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(76, 175, 130, 0.45); }
+  50% { box-shadow: 0 0 0 8px rgba(76, 175, 130, 0); }
+}
+
+/* ---------- App simulation mockup ---------- */
+.lp-mock-window {
+  border-radius: 18px;
+  overflow: hidden;
+  box-shadow: 0 30px 60px -20px rgba(20, 23, 59, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.06);
+  background: #fff;
+}
+
+.lp-mock-topbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+  background: #e9ebf5;
+}
+.lp-mock-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: #cfd3ea;
+}
+
+.lp-mock-body {
+  display: flex;
+  min-height: 340px;
+}
+
+.lp-mock-sidebar {
+  width: 130px;
+  flex-shrink: 0;
+  background: var(--lp-navy);
+  padding: 14px 10px;
+}
+
+.lp-mock-nav-item {
+  font-size: 10px;
+  color: #b7bdea;
+  padding: 7px 9px;
+  border-radius: 7px;
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: background 0.25s ease, color 0.25s ease;
+}
+.lp-mock-nav-item.lp-active {
+  background: rgba(76, 175, 130, 0.18);
+  color: #fff;
+}
+
+.lp-mock-main {
+  flex: 1;
+  padding: 16px;
+  background: var(--lp-bg);
+  position: relative;
+  overflow: hidden;
+}
+
+.lp-mock-screen {
+  animation: lpScreenIn 0.5s ease both;
+}
+@keyframes lpScreenIn {
+  from { opacity: 0; transform: translateX(10px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.lp-mock-card {
+  background: #fff;
+  border-radius: 10px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+  padding: 10px 12px;
+}
+
+.lp-cart-row {
+  animation: lpRowIn 0.4s ease both;
+}
+@keyframes lpRowIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.lp-cursor {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  transition: transform 0.55s cubic-bezier(0.4, 0, 0.2, 1);
+  z-index: 5;
+}
+
+.lp-cursor-dot {
+  position: absolute;
+  top: -7px;
+  left: -7px;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px 999px 999px 999px;
+  background: var(--lp-green);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+  transition: transform 0.2s ease;
+  display: block;
+}
+.lp-cursor-dot.lp-clicking {
+  transform: scale(0.8);
+}
+.lp-cursor-dot::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: 999px;
+  background: var(--lp-green);
+  opacity: 0;
+}
+.lp-cursor-dot.lp-clicking::after {
+  animation: lpClickRipple 0.45s ease-out;
+}
+@keyframes lpClickRipple {
+  0%   { transform: scale(0.4); opacity: 0.5; }
+  100% { transform: scale(3); opacity: 0; }
+}
+
+/* ---------- Plan cards ---------- */
+.lp-plan-card {
+  transition: transform 0.35s ease, box-shadow 0.35s ease;
+}
+.lp-plan-card:hover {
+  transform: translateY(-6px);
+  box-shadow: 0 24px 40px -18px rgba(28, 32, 80, 0.35);
+}
+.lp-plan-featured {
+  background: linear-gradient(160deg, var(--lp-navy), #262a63);
+}
+
+/* ---------- Steps ---------- */
+.lp-step-num {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Marquee-ish soft float ---------- */
+.lp-float {
+  animation: lpFloat 6s ease-in-out infinite;
+}
+@keyframes lpFloat {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-10px); }
+}

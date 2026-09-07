@@ -1,7 +1,10 @@
 import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { FileDown } from 'lucide-react';
 import { PageHeader, fmt } from '../ui/index.jsx';
 import { api } from '../../lib/api.js';
+import { downloadPdfReport } from '../../lib/pdf.js';
+import { useAuthStore } from '../../store/authStore.js';
 
 function monthParamsFor(date) {
   return { month: date.getMonth() + 1, year: date.getFullYear() };
@@ -20,6 +23,7 @@ function trendClass(curr, prev) {
 }
 
 export default function ReportsPage() {
+  const kioskName = useAuthStore((s) => s.user?.kiosk?.name);
   const [selectedDate, setSelectedDate] = useState(new Date());
   const thisMonth = monthParamsFor(selectedDate);
   const prevDate = new Date(selectedDate.getFullYear(), selectedDate.getMonth() - 1, 1);
@@ -53,6 +57,45 @@ export default function ReportsPage() {
     setSelectedDate(new Date(selectedDate.getFullYear(), selectedDate.getMonth() + 1, 1));
   }
 
+  function handleExportPdf() {
+    const periodLabel = new Date(thisMonth.year, thisMonth.month - 1).toLocaleString('es-AR', { month: 'long', year: 'numeric' });
+    const rows = [
+      ['Ventas totales', fmt(prevData.revenue || 0), fmt(data.revenue || 0)],
+      ['Costo de la mercadería (COGS)', fmt(prevData.cogs || 0), fmt(data.cogs || 0)],
+      [
+        'Gastos del local',
+        fmt((prevData.expenseBreakdown || []).reduce((s, f) => s + (f.amount ? parseFloat(f.amount) : 0), 0) || 0),
+        fmt((data.expenseBreakdown || []).reduce((s, f) => s + (f.amount ? parseFloat(f.amount) : 0), 0) || 0),
+      ],
+      ['Lo que realmente ganaste', fmt((prevData.grossProfit || 0) - (prevData.expenses || 0)), fmt(netCurrent)],
+      ['Margen bruto', prevData.grossMargin ? `${prevData.grossMargin}%` : '-', data.grossMargin ? `${data.grossMargin}%` : '-'],
+      ['Ticket promedio', fmt(prevData.avgTicket || 0), fmt(data.avgTicket || 0)],
+      ['Efectivo', fmt(prevData.cashSales || 0), fmt(data.cashSales || 0)],
+      ['Transferencias', fmt(prevData.transferSales || 0), fmt(data.transferSales || 0)],
+      ['Tarjeta', fmt(prevData.cardSales || 0), fmt(data.cardSales || 0)],
+    ];
+
+    downloadPdfReport({
+      title: 'Resultados del mes',
+      subtitle: `Comparativa · ${periodLabel}`,
+      kioskName,
+      meta: [`${data.salesCount || 0} ventas · Ticket promedio ${fmt(data.avgTicket || 0)}`],
+      columns: ['Métrica', 'Mes anterior', 'Mes actual'],
+      rows,
+      sections: topProducts.length ? [{
+        title: 'Productos más vendidos del mes',
+        columns: ['#', 'Producto', 'Cantidad vendida'],
+        rows: topProducts.map((p, idx) => [String(idx + 1), p.name, `${p.qty || 0} u.`]),
+      }] : [],
+      summary: [
+        ['Total vendido', fmt(data.revenue || 0)],
+        ['Gastos del local', fmt(data.expenses || 0)],
+        ['Ganancia neta del mes', fmt(netCurrent)],
+      ],
+      filename: `resultados-${thisMonth.year}-${String(thisMonth.month).padStart(2, '0')}.pdf`,
+    });
+  }
+
   if (loading) return (
     <div className="flex flex-col flex-1 overflow-hidden">
       <PageHeader title="Resultados del mes" subtitle="Comparativa mes actual / mes anterior" />
@@ -72,6 +115,10 @@ export default function ReportsPage() {
             <div className="rounded-full bg-gray-100 px-3 py-1 text-sm">{new Date(thisMonth.year, thisMonth.month-1).toLocaleString(undefined,{month:'long', year:'numeric'})}</div>
             <button onClick={nextMonthClick} className="btn-outline">›</button>
           </div>
+          <button type="button" onClick={handleExportPdf} className="btn-outline inline-flex items-center gap-2">
+            <FileDown size={15} />
+            Descargar PDF
+          </button>
         </div>
 
         {/* Top semaphores */}
