@@ -177,11 +177,10 @@ docs/                      → documentación (índice en docs/README.md)
 
 ## Estado actual (25-oct-2026)
 
-- Rama `develop`. Último commit: `83c328d1` (PDF exports, códigos de barras premium, aislamiento
-  multi-tenant, migración a PostgreSQL e infraestructura de deploy).
-- **Sin commitear**: feature clientes/fiado/puntos (2026-09-17) + auditoría de bugs (2026-10-24)
-  + suscripción mensual, WhatsApp y precios de planes, logo nuevo, modo oscuro, revisión para la
-  beta, gastos dentro/fuera de caja e historial completo (2026-10-25).
+- Rama `develop`. Todo el trabajo hasta el 25-oct quedó commiteado ("Cambios importantes",
+  2026-11-20). El 20-nov se unió con el `develop` de GitHub (merge `-s ours`, ver registro).
+- **GitHub está desactualizado**: `origin/develop` y `origin/main` tienen la versión de junio-2026
+  (SQLite). Falta `git push origin develop` desde una máquina con credenciales.
 - **No hay constancia de que las 7 migraciones posteriores a `init_postgres` estén en producción.**
   La de suscripciones requiere una acción manual después del deploy, y hay que cargar el WhatsApp
   y los precios en Configuración (ver GUIA_DEPLOY).
@@ -216,6 +215,15 @@ docs/                      → documentación (índice en docs/README.md)
 - [ ] **Actualizar Node en el VPS a 24.22.1** (si se armó con la guía vieja tiene Node 20, sin
       parches del 21-oct-2026). No se pudo verificar desde acá: `ssh` + `node -v`. Ver GUIA_DEPLOY,
       "Actualizar Node en el VPS". Hasta que se actualice, `deploy.sh` no va a deployar.
+- [ ] **Repo público con secretos en la historia**: los commits de junio (en `origin/main` y
+      `respaldo-junio-2026`) versionan `app/backend/.env` (JWT_SECRET de desarrollo, ya cambiado
+      el 20-nov) y `dev.db`. Hacer el repo privado o purgar la historia, y confirmar que el
+      `JWT_SECRET` del VPS no sea el publicado.
+- [ ] `main` (lo que se deploya) sigue en la versión de junio: pasar `develop` a `main` cuando se
+      decida deployar (dispara el deploy, ver GUIA_DEPLOY y los pasos post-deploy).
+- [ ] Rescatar de `respaldo-junio-2026` si hace falta: `StockProductModal`, `packPrice`/`packUnits`
+      en `PurchaseItem`, scripts de productos duplicados (`dedupe-products.mjs`,
+      `cleanup-duplicate-products.js`).
 - [ ] Suscripción: no hay pagos de varios meses por adelantado.
 - [x] ~~Botones de la landing al mail~~ → van al WhatsApp de Configuración (2026-10-25). Queda:
       los mockups de la landing dicen `kioscoapp.com/app` / "KioscoApp", y sin WhatsApp cargado el
@@ -227,6 +235,20 @@ docs/                      → documentación (índice en docs/README.md)
 
 Más reciente arriba. Cada entrada: fecha, título, qué cambió (backend / frontend / DB),
 por qué si no es obvio, y docs tocados.
+
+### 2026-11-20 — Unión con el develop de GitHub (pull trabado)
+- **Problema**: `git pull` fallaba. `origin/develop` tenía 7 commits de junio-2026 (otra máquina,
+  época SQLite) que esta copia nunca bajó, y esta copia siguió desde el commit anterior (ago–nov:
+  PostgreSQL y todo lo demás). Las dos historias divergían, y la de junio todavía versionaba
+  `node_modules`, `dist`, `.env` y `dev.db` (18.538 archivos).
+- **Solución**: `git merge -s ours origin/develop`. El código local queda idéntico (verificado: mismo
+  árbol) y los commits de junio quedan en la historia sin aplicarse. La versión de junio queda
+  respaldada en `origin/develop` hasta el push, y conviene crear la rama `respaldo-junio-2026`.
+- **Seguridad**: el repo es público y el `.env` de junio expone el mismo `JWT_SECRET` que se usaba en
+  desarrollo. Se generó uno nuevo en `app/backend/.env` local. Los tokens de sesión viejos de
+  desarrollo dejan de valer.
+- Pendiente (necesita credenciales de GitHub): `git push origin origin/develop:refs/heads/respaldo-junio-2026`
+  y `git push origin develop`.
 
 ### 2026-10-25 — Node 24 LTS con parches (security release del 21-oct-2026)
 - **Contexto**: el 21-oct-2026 Node publicó parches para 10 CVE (4 High), entre ellos un
