@@ -216,14 +216,11 @@ docs/                      → documentación (índice en docs/README.md)
       parches del 21-oct-2026). No se pudo verificar desde acá: `ssh` + `node -v`. Ver GUIA_DEPLOY,
       "Actualizar Node en el VPS". Hasta que se actualice, `deploy.sh` no va a deployar.
 - [ ] **Repo público con secretos en la historia**: los commits de junio (en `origin/main` y
-      `respaldo-junio-2026`) versionan `app/backend/.env` (JWT_SECRET de desarrollo, ya cambiado
+      la historia de `develop`) versionan `app/backend/.env` (JWT_SECRET de desarrollo, ya cambiado
       el 20-nov) y `dev.db`. Hacer el repo privado o purgar la historia, y confirmar que el
       `JWT_SECRET` del VPS no sea el publicado.
 - [ ] `main` (lo que se deploya) sigue en la versión de junio: pasar `develop` a `main` cuando se
       decida deployar (dispara el deploy, ver GUIA_DEPLOY y los pasos post-deploy).
-- [ ] Rescatar de `respaldo-junio-2026` si hace falta: `StockProductModal`, `packPrice`/`packUnits`
-      en `PurchaseItem`, scripts de productos duplicados (`dedupe-products.mjs`,
-      `cleanup-duplicate-products.js`).
 - [ ] Suscripción: no hay pagos de varios meses por adelantado.
 - [x] ~~Botones de la landing al mail~~ → van al WhatsApp de Configuración (2026-10-25). Queda:
       los mockups de la landing dicen `kioscoapp.com/app` / "KioscoApp", y sin WhatsApp cargado el
@@ -242,13 +239,12 @@ por qué si no es obvio, y docs tocados.
   PostgreSQL y todo lo demás). Las dos historias divergían, y la de junio todavía versionaba
   `node_modules`, `dist`, `.env` y `dev.db` (18.538 archivos).
 - **Solución**: `git merge -s ours origin/develop`. El código local queda idéntico (verificado: mismo
-  árbol) y los commits de junio quedan en la historia sin aplicarse. La versión de junio queda
-  respaldada en `origin/develop` hasta el push, y conviene crear la rama `respaldo-junio-2026`.
+  árbol) y los commits de junio quedan en la historia sin aplicarse. Decisión: lo de junio es
+  viejo y no se rescata nada (sin rama de respaldo; igual sigue accesible en la historia del merge).
 - **Seguridad**: el repo es público y el `.env` de junio expone el mismo `JWT_SECRET` que se usaba en
   desarrollo. Se generó uno nuevo en `app/backend/.env` local. Los tokens de sesión viejos de
   desarrollo dejan de valer.
-- Pendiente (necesita credenciales de GitHub): `git push origin origin/develop:refs/heads/respaldo-junio-2026`
-  y `git push origin develop`.
+- Pendiente (necesita credenciales de GitHub): `git push origin develop`.
 
 ### 2026-10-25 — Node 24 LTS con parches (security release del 21-oct-2026)
 - **Contexto**: el 21-oct-2026 Node publicó parches para 10 CVE (4 High), entre ellos un
