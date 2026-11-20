@@ -14,6 +14,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
       <Toaster
         position="top-right"
         toastOptions={{
+          className: 'app-toast',
           style: { fontFamily: 'DM Sans', fontSize: '0.875rem' },
           success: { iconTheme: { primary: '#4caf82', secondary: '#fff' } },
         }}

@@ -37,7 +37,7 @@ export default function LoginPage() {
     <div className="min-h-screen bg-brand-sidebar flex items-center justify-center p-6">
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
-          <Logo className="h-10 mx-auto mb-4" />
+          <Logo onDark className="h-10 mx-auto mb-4" />
           <p className="text-slate-400 text-sm mt-1">Sistema de gestión</p>
         </div>
 

@@ -15,7 +15,7 @@ function buildProductInclude(kioskId) {
   if (kioskId) {
     include.kioskProducts = {
       where: { kioskId },
-      select: { id: true, stock: true, minStock: true, price: true, barcodePrinted: true },
+      select: { id: true, stock: true, minStock: true, price: true, cost: true, barcodePrinted: true },
     };
   }
 
@@ -43,9 +43,22 @@ function mergeProductInventory(product) {
     stock: inventory.stock,
     minStock: inventory.minStock,
     salePrice: inventory.price ?? product.salePrice,
+    costPrice: inventory.cost ?? product.costPrice,
     kioskInventoryId: inventory.id,
     barcodePrinted: inventory.barcodePrinted ?? false,
   };
+}
+
+// `<= 0` y no `=== 0`: un stock negativo (datos viejos, de antes de que la
+// venta validara el stock de forma atómica) se mostraba como "Crítico" en vez
+// de "Sin stock".
+function getStockStatus(stock, minStock) {
+  const current = stock ?? 0;
+  const min = minStock ?? 0;
+  if (current <= 0) return 'OUT';
+  if (current <= min) return 'CRITICAL';
+  if (current <= min * 1.5) return 'ALERT';
+  return 'OK';
 }
 
 // Mismo cálculo por-fila que usa la vista de stock (GET /products?stockView=1)
@@ -56,11 +69,8 @@ function mapStockViewProduct(product) {
     stock: inventory?.stock ?? 0,
     minStock: inventory?.minStock ?? 0,
     salePrice: inventory?.price ?? product.salePrice,
-    stockStatus:
-      (inventory?.stock ?? 0) === 0 ? 'OUT'
-      : (inventory?.stock ?? 0) <= (inventory?.minStock ?? 0) ? 'CRITICAL'
-      : (inventory?.stock ?? 0) <= (inventory?.minStock ?? 0) * 1.5 ? 'ALERT'
-      : 'OK',
+    costPrice: inventory?.cost ?? product.costPrice,
+    stockStatus: getStockStatus(inventory?.stock, inventory?.minStock),
     kioskInventoryId: inventory?.id ?? null,
     barcodePrinted: inventory?.barcodePrinted ?? false,
   };
@@ -75,11 +85,13 @@ async function upsertKioskInventory(tx, kioskId, productId, data) {
       stock: data.stock ?? 0,
       minStock: data.minStock ?? 0,
       price: data.price ?? null,
+      cost: data.cost ?? null,
     },
     update: {
       ...(data.stock !== undefined ? { stock: data.stock } : {}),
       ...(data.minStock !== undefined ? { minStock: data.minStock } : {}),
       ...(data.price !== undefined ? { price: data.price } : {}),
+      ...(data.cost !== undefined ? { cost: data.cost } : {}),
     },
   });
 }
@@ -155,12 +167,15 @@ function buildSearchWhere(search) {
   if (!term) return undefined;
 
   const numericLike = /^[0-9\-\s.]+$/.test(term);
+  // Postgres, a diferencia de SQLite, distingue mayúsculas/minúsculas en
+  // `contains` por defecto — sin `mode: 'insensitive'` buscar "coca" no
+  // encontraba "Coca Cola".
   return {
     OR: [
-      { name: { contains: term } },
+      { name: { contains: term, mode: 'insensitive' } },
       { id: { startsWith: term } },
-      { barcode: numericLike ? { startsWith: term } : { contains: term } },
-      { sku: numericLike ? { startsWith: term } : { contains: term } },
+      { barcode: numericLike ? { startsWith: term } : { contains: term, mode: 'insensitive' } },
+      { sku: numericLike ? { startsWith: term } : { contains: term, mode: 'insensitive' } },
     ],
   };
 }
@@ -200,7 +215,12 @@ function applySearchWhere(where, searchWhere) {
   return { ...where, ...searchWhere };
 }
 
-function computeProductValues(body) {
+// `deriveStockFromPacks` solo en el alta: "cantidad de packs" describe la
+// carga inicial. Antes también se usaba al editar, y como packCount queda
+// guardado con el valor de la primera carga, editar cualquier cosa de un
+// producto por pack (por ejemplo el precio) volvía a poner el stock en
+// packUnits × packCount y borraba todo lo vendido o recibido desde entonces.
+function computeProductValues(body, { deriveStockFromPacks = false } = {}) {
   const loadMode = body.loadMode === 'unit' ? 'unit' : 'pack';
   const packPrice = toNumber(body.packPrice);
   const packUnits = toInt(body.packUnits);
@@ -216,9 +236,20 @@ function computeProductValues(body) {
   const resolvedPackPrice = packPrice !== undefined ? packPrice : unitCost;
   const resolvedPackUnits = packUnits;
   const derivedUnitCost = resolvedPackPrice !== undefined && resolvedPackUnits ? resolvedPackPrice / resolvedPackUnits : unitCost;
-  const resolvedStock = packUnits !== undefined && packCount !== undefined ? packUnits * packCount : stock;
+  const resolvedStock = stock === undefined && deriveStockFromPacks && packUnits !== undefined && packCount !== undefined
+    ? packUnits * packCount
+    : stock;
 
   return { loadMode, packPrice: resolvedPackPrice, packUnits: resolvedPackUnits, packCount, unitCost: derivedUnitCost, stock: resolvedStock, salePrice };
+}
+
+function validateProductValues(values, minStock) {
+  if (values.stock !== undefined && values.stock < 0) return 'El stock no puede ser negativo';
+  if (minStock !== undefined && minStock < 0) return 'El stock mínimo no puede ser negativo';
+  if (values.salePrice !== undefined && values.salePrice < 0) return 'El precio de venta no puede ser negativo';
+  if (values.unitCost !== undefined && values.unitCost < 0) return 'El costo no puede ser negativo';
+  if (values.packUnits !== undefined && values.packUnits <= 0) return 'Las unidades por pack tienen que ser mayores a cero';
+  return null;
 }
 
 // GET /api/products
@@ -311,11 +342,7 @@ productsRouter.get('/', async (req, res, next) => {
 
         const enriched = products.map((p) => ({
           ...p,
-          stockStatus:
-            p.stock === 0 ? 'OUT'
-            : p.stock <= p.minStock ? 'CRITICAL'
-            : p.stock <= p.minStock * 1.5 ? 'ALERT'
-            : 'OK',
+          stockStatus: getStockStatus(p.stock, p.minStock),
         }));
 
         res.json({
@@ -330,11 +357,7 @@ productsRouter.get('/', async (req, res, next) => {
 
       const enriched = listProducts.map((p) => ({
         ...p,
-        stockStatus:
-          p.stock === 0 ? 'OUT'
-          : p.stock <= p.minStock ? 'CRITICAL'
-          : p.stock <= p.minStock * 1.5 ? 'ALERT'
-          : 'OK',
+        stockStatus: getStockStatus(p.stock, p.minStock),
       }));
 
       res.json(enriched);
@@ -369,15 +392,8 @@ productsRouter.get('/', async (req, res, next) => {
       ]);
 
       const enriched = products.map((p) => {
-        const inventory = getKioskInventory(p);
-        return {
-          ...mergeProductInventory(p),
-          stockStatus:
-            inventory?.stock === 0 ? 'OUT'
-            : inventory?.stock <= inventory?.minStock ? 'CRITICAL'
-            : inventory?.stock <= inventory?.minStock * 1.5 ? 'ALERT'
-            : 'OK',
-        };
+        const merged = mergeProductInventory(p);
+        return { ...merged, stockStatus: getStockStatus(merged.stock, merged.minStock) };
       });
 
       res.json({
@@ -397,15 +413,8 @@ productsRouter.get('/', async (req, res, next) => {
     });
 
     const enriched = products.map((p) => {
-      const inventory = getKioskInventory(p);
-      return {
-        ...mergeProductInventory(p),
-        stockStatus:
-          inventory?.stock === 0 ? 'OUT'
-          : inventory?.stock <= inventory?.minStock ? 'CRITICAL'
-          : inventory?.stock <= inventory?.minStock * 1.5 ? 'ALERT'
-          : 'OK',
-      };
+      const merged = mergeProductInventory(p);
+      return { ...merged, stockStatus: getStockStatus(merged.stock, merged.minStock) };
     });
 
     res.json(enriched);
@@ -443,7 +452,7 @@ productsRouter.get('/prices', async (req, res, next) => {
         subcategory: { select: { name: true, category: { select: { name: true } } } },
         kioskProducts: {
           where: { kioskId: kiosk.id },
-          select: { id: true, stock: true, minStock: true, price: true },
+          select: { id: true, stock: true, minStock: true, price: true, cost: true },
         },
       },
       orderBy: [
@@ -510,11 +519,19 @@ productsRouter.post('/:id/clone-to-kiosk', async (req, res, next) => {
       return res.status(404).json({ error: 'Producto no encontrado' });
     }
 
-    await upsertKioskInventory(prisma, kiosk.id, source.id, {
+    const inventory = {
       stock: toInt(req.body.stock) ?? 0,
       minStock: req.body.minStock !== undefined ? (toInt(req.body.minStock) ?? 0) : (source.minStock ?? 0),
       price: req.body.price !== undefined ? toNumber(req.body.price) ?? null : (source.salePrice ?? null),
-    });
+      cost: req.body.cost !== undefined ? toNumber(req.body.cost) ?? null : (source.costPrice ?? null),
+    };
+    const inventoryError = validateProductValues(
+      { stock: inventory.stock, salePrice: inventory.price ?? undefined, unitCost: inventory.cost ?? undefined },
+      inventory.minStock,
+    );
+    if (inventoryError) return res.status(400).json({ error: inventoryError });
+
+    await upsertKioskInventory(prisma, kiosk.id, source.id, inventory);
 
     const updated = await prisma.product.findUnique({
       where: { id: source.id },
@@ -528,59 +545,71 @@ productsRouter.post('/:id/clone-to-kiosk', async (req, res, next) => {
 });
 
 // POST /api/products
+// Desde una sucursal solo se crean productos PROPIOS del cliente. Antes el
+// body decidía `isCustom` y hasta `customerId`: si en el formulario se elegía
+// un producto del catálogo y después se tocaba "Cambiar", el form quedaba con
+// isCustom:false y se creaba un producto GLOBAL (visible para todos los
+// negocios, sin precio y sin stock en la sucursal que lo cargó); y mandando
+// otro customerId se podía crear un producto a nombre de otro cliente. El
+// catálogo global se carga con el seed (db:seed:catalog), no desde la app.
 productsRouter.post('/', async (req, res, next) => {
   try {
-    const { name, barcode, sku, subcategoryId, supplierId, minStock, expiresAt, description, isCustom, customerId } = req.body;
+    const { barcode, sku, subcategoryId, supplierId, expiresAt, description } = req.body;
     const kiosk = await resolveRequestKiosk(req);
-    const wantsCustom = isCustom === true || isCustom === 'true';
-    const resolvedCustomerId = customerId !== undefined
-      ? customerId || null
-      : (wantsCustom ? kiosk?.customerId || null : null);
-    const values = computeProductValues(req.body);
-    // El catálogo global (isCustom false) es compartido por todos los clientes:
-    // no debe llevar precio ni proveedor propios de un kiosco en particular.
-    const product = await prisma.product.create({
-      data: {
-        name,
-        barcode: barcode || null,
-        sku: sku || null,
-        loadMode: values.loadMode,
-        subcategoryId: subcategoryId || null,
-        supplierId: wantsCustom ? supplierId || null : null,
-        basePrice: wantsCustom ? values.packPrice ?? null : null,
-        baseCost: wantsCustom ? values.unitCost : null,
-        packPrice: wantsCustom ? values.packPrice ?? null : null,
-        packUnits: values.packUnits ?? null,
-        packCount: values.packCount ?? null,
-        costPrice: wantsCustom ? values.unitCost : null,
-        salePrice: wantsCustom ? values.salePrice : null,
-        stock: values.stock ?? 0,
-        minStock: toInt(minStock) || 0,
-        expiresAt: expiresAt ? new Date(expiresAt) : null,
-        description,
-        isCustom: wantsCustom,
-        customerId: resolvedCustomerId,
-      },
-      include: buildProductInclude(kiosk?.id),
-    });
+    if (!kiosk) return res.status(400).json({ error: 'No hay kiosko configurado' });
 
-    if (kiosk && wantsCustom) {
-      await upsertKioskInventory(prisma, kiosk.id, product.id, {
-        stock: values.stock ?? 0,
-        minStock: toInt(minStock) || 0,
-        price: values.salePrice ?? null,
-      });
+    const name = String(req.body.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'El nombre del producto es obligatorio' });
 
-      const createdProduct = await prisma.product.findUnique({
-        where: { id: product.id },
-        include: buildProductInclude(kiosk.id),
-      });
+    const values = computeProductValues(req.body, { deriveStockFromPacks: true });
+    const minStock = toInt(req.body.minStock);
+    const valuesError = validateProductValues(values, minStock);
+    if (valuesError) return res.status(400).json({ error: valuesError });
 
-      res.status(201).json(mergeProductInventory(createdProduct));
-      return;
+    if (supplierId) {
+      const supplier = await prisma.supplier.findFirst({ where: { id: supplierId, kioskId: kiosk.id }, select: { id: true } });
+      if (!supplier) return res.status(400).json({ error: 'El proveedor no pertenece a esta sucursal' });
     }
 
-    res.status(201).json(product);
+    const product = await prisma.$transaction(async (tx) => {
+      const created = await tx.product.create({
+        data: {
+          name,
+          barcode: barcode || null,
+          sku: sku || null,
+          loadMode: values.loadMode,
+          subcategoryId: subcategoryId || null,
+          supplierId: supplierId || null,
+          basePrice: values.packPrice ?? null,
+          baseCost: values.unitCost ?? null,
+          packPrice: values.packPrice ?? null,
+          packUnits: values.packUnits ?? null,
+          packCount: values.packCount ?? null,
+          costPrice: values.unitCost ?? null,
+          salePrice: values.salePrice ?? null,
+          stock: values.stock ?? 0,
+          minStock: minStock || 0,
+          expiresAt: expiresAt ? new Date(expiresAt) : null,
+          description,
+          isCustom: true,
+          customerId: kiosk.customerId,
+        },
+      });
+
+      await upsertKioskInventory(tx, kiosk.id, created.id, {
+        stock: values.stock ?? 0,
+        minStock: minStock || 0,
+        price: values.salePrice ?? null,
+        cost: values.unitCost ?? null,
+      });
+
+      return tx.product.findUnique({
+        where: { id: created.id },
+        include: buildProductInclude(kiosk.id),
+      });
+    });
+
+    res.status(201).json(mergeProductInventory(product));
   } catch (err) {
     next(err);
   }
@@ -602,20 +631,23 @@ function effectiveLoadMode(product) {
 // viven en KioskProduct (por-kiosco) y editarlos no debería convertir un
 // producto global en "propio".
 function sharedProductFieldsChanged(existing, values, body) {
+  const currentExpiresAt = existing.expiresAt ? new Date(existing.expiresAt).getTime() : null;
+  // Un campo que no viene en el body no cambió. Antes un PUT parcial (por ejemplo
+  // solo { stock }) tomaba como cambios el loadMode 'pack' por defecto, los packs
+  // y el vencimiento ausentes, y clonaba el producto global como propio.
   const incoming = {
     name: body.name !== undefined ? body.name : existing.name,
     barcode: body.barcode !== undefined ? (body.barcode || null) : existing.barcode,
     sku: body.sku !== undefined ? (body.sku || null) : existing.sku,
-    loadMode: values.loadMode,
+    loadMode: body.loadMode !== undefined ? values.loadMode : effectiveLoadMode(existing),
     subcategoryId: body.subcategoryId !== undefined ? (body.subcategoryId || null) : existing.subcategoryId,
     supplierId: body.supplierId !== undefined ? (body.supplierId || null) : existing.supplierId,
-    packPrice: values.packPrice ?? null,
-    packUnits: values.packUnits ?? null,
-    packCount: values.packCount ?? null,
+    packPrice: body.packPrice !== undefined || body.costPrice !== undefined ? (values.packPrice ?? null) : existing.packPrice,
+    packUnits: body.packUnits !== undefined ? (values.packUnits ?? null) : existing.packUnits,
+    packCount: body.packCount !== undefined ? (values.packCount ?? null) : existing.packCount,
     description: body.description !== undefined ? (body.description || null) : existing.description,
-    expiresAt: body.expiresAt ? new Date(body.expiresAt).getTime() : null,
+    expiresAt: body.expiresAt !== undefined ? (body.expiresAt ? new Date(body.expiresAt).getTime() : null) : currentExpiresAt,
   };
-  const currentExpiresAt = existing.expiresAt ? new Date(existing.expiresAt).getTime() : null;
 
   return (
     incoming.name !== existing.name ||
@@ -650,10 +682,21 @@ productsRouter.put('/:id', async (req, res, next) => {
         id: true, customerId: true, name: true, barcode: true, sku: true, loadMode: true,
         subcategoryId: true, supplierId: true, packPrice: true, packUnits: true, packCount: true,
         description: true, expiresAt: true,
+        kioskProducts: { where: { kioskId: kiosk.id }, select: { stock: true, minStock: true, price: true, cost: true } },
       },
     });
     if (!existing) return res.status(404).json({ error: 'Producto no encontrado' });
     const values = computeProductValues(req.body);
+    const valuesError = validateProductValues(values, toInt(minStock));
+    if (valuesError) return res.status(400).json({ error: valuesError });
+    if (name !== undefined && !String(name).trim()) {
+      return res.status(400).json({ error: 'El nombre del producto es obligatorio' });
+    }
+    if (supplierId) {
+      const supplier = await prisma.supplier.findFirst({ where: { id: supplierId, kioskId: kiosk.id }, select: { id: true } });
+      if (!supplier) return res.status(400).json({ error: 'El proveedor no pertenece a esta sucursal' });
+    }
+    const currentInventory = existing.kioskProducts[0] || null;
 
     // Un producto del catálogo global (customerId null) es compartido por todos
     // los clientes. Antes esta ruta lo pisaba directo con prisma.product.update,
@@ -666,7 +709,7 @@ productsRouter.put('/:id', async (req, res, next) => {
     const needsClone = isGlobalProduct && sharedProductFieldsChanged(existing, values, req.body);
 
     const sharedData = {
-      name,
+      name: name !== undefined ? String(name).trim() : undefined,
       barcode: barcode !== undefined ? barcode || null : undefined,
       sku: sku !== undefined ? sku || null : undefined,
       loadMode: values.loadMode,
@@ -686,44 +729,68 @@ productsRouter.put('/:id', async (req, res, next) => {
 
     let productId = existing.id;
 
-    if (needsClone) {
-      const cloned = await prisma.product.create({
-        data: {
-          ...sharedData,
-          barcode: sharedData.barcode ?? null,
-          subcategoryId: sharedData.subcategoryId ?? null,
-          supplierId: sharedData.supplierId ?? null,
-          minStock: sharedData.minStock ?? 0,
-          stock: 0,
-          isCustom: true,
-          customerId: kiosk.customerId,
-          active: true,
-        },
-      });
-      productId = cloned.id;
-
-      // Ya no hace falta la referencia al producto global en el stock de este
-      // kiosco: a partir de ahora usa su propia copia. El original global
-      // queda intacto para el resto de los clientes.
-      await prisma.kioskProduct.deleteMany({ where: { kioskId: kiosk.id, productId: existing.id } });
-    } else if (!isGlobalProduct) {
-      await prisma.product.update({
-        where: { id: req.params.id },
-        data: { ...sharedData, isCustom: true, customerId: kiosk.customerId },
-      });
-    }
-    // else: es un producto global y no cambió nada del catálogo compartido —
-    // no se toca el Product, solo el KioskProduct de este kiosco más abajo.
-
-    await upsertKioskInventory(prisma, kiosk.id, productId, {
+    // Si el front no manda `stock` (no se tocó en el formulario), no se pisa:
+    // así una venta hecha mientras el formulario estaba abierto no se pierde.
+    let inventoryData = {
       stock: values.stock,
       minStock: sharedData.minStock,
       price: values.salePrice,
-    });
+      cost: values.unitCost,
+    };
 
-    const updatedProduct = await prisma.product.findUnique({
-      where: { id: productId },
-      include: buildProductInclude(kiosk.id),
+    const updatedProduct = await prisma.$transaction(async (tx) => {
+      if (needsClone) {
+        // barcode y sku son únicos en toda la base: la copia no puede repetir
+        // los del global (antes fallaba con 409 "Ya existe un registro con ese
+        // valor único" al editar, p. ej., el proveedor de un global con SKU).
+        const clonedBarcode = sharedData.barcode !== undefined && sharedData.barcode !== existing.barcode ? sharedData.barcode : null;
+        const clonedSku = sharedData.sku !== undefined && sharedData.sku !== existing.sku ? sharedData.sku : null;
+        const cloned = await tx.product.create({
+          data: {
+            ...sharedData,
+            name: sharedData.name ?? existing.name,
+            barcode: clonedBarcode,
+            sku: clonedSku,
+            subcategoryId: sharedData.subcategoryId ?? null,
+            supplierId: sharedData.supplierId ?? null,
+            minStock: sharedData.minStock ?? 0,
+            stock: 0,
+            isCustom: true,
+            customerId: kiosk.customerId,
+            active: true,
+          },
+        });
+        productId = cloned.id;
+
+        // La copia hereda el inventario que la sucursal tenía del global. Antes
+        // se borraba el KioskProduct del global y la copia arrancaba con el
+        // stock que mandara el form (0 si no venía): se perdía el stock.
+        inventoryData = {
+          stock: inventoryData.stock ?? currentInventory?.stock ?? 0,
+          minStock: inventoryData.minStock ?? currentInventory?.minStock ?? 0,
+          price: inventoryData.price ?? currentInventory?.price ?? null,
+          cost: inventoryData.cost ?? currentInventory?.cost ?? null,
+        };
+
+        // Ya no hace falta la referencia al producto global en el stock de este
+        // kiosco: a partir de ahora usa su propia copia. El original global
+        // queda intacto para el resto de los clientes.
+        await tx.kioskProduct.deleteMany({ where: { kioskId: kiosk.id, productId: existing.id } });
+      } else if (!isGlobalProduct) {
+        await tx.product.update({
+          where: { id: req.params.id },
+          data: { ...sharedData, isCustom: true, customerId: kiosk.customerId },
+        });
+      }
+      // else: es un producto global y no cambió nada del catálogo compartido —
+      // no se toca el Product, solo el KioskProduct de este kiosco más abajo.
+
+      await upsertKioskInventory(tx, kiosk.id, productId, inventoryData);
+
+      return tx.product.findUnique({
+        where: { id: productId },
+        include: buildProductInclude(kiosk.id),
+      });
     });
 
     res.json(mergeProductInventory(updatedProduct));
@@ -799,7 +866,9 @@ productsRouter.get('/barcode/:code', async (req, res, next) => {
       include: buildProductInclude(kiosk.id),
     });
     if (!product) return res.status(404).json({ error: 'Producto no encontrado' });
-    res.json(product);
+    // Con el stock/precio/costo de la sucursal: antes devolvía el Product
+    // crudo, con los campos legados (en un global, precio null y stock 0).
+    res.json(mergeProductInventory(product));
   } catch (err) {
     next(err);
   }

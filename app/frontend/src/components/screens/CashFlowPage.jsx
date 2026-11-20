@@ -1,11 +1,19 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
-import { FileDown } from 'lucide-react';
+import { Banknote, FileDown, Landmark } from 'lucide-react';
 import { PageHeader, fmt } from '../ui/index.jsx';
 import { api } from '../../lib/api.js';
 import { downloadPdfReport } from '../../lib/pdf.js';
 import { useAuthStore } from '../../store/authStore.js';
+
+// "¿Salió de la caja?": un gasto pagado por transferencia o débito (alquiler,
+// servicios) cuenta en los resultados del mes, pero no se resta del efectivo
+// esperado del arqueo. Antes todo gasto se restaba de la caja.
+const PAID_FROM_OPTIONS = [
+  { value: true, label: 'Sí, de la caja', hint: 'Efectivo del cajón', icon: Banknote },
+  { value: false, label: 'No, por fuera', hint: 'Transferencia, débito...', icon: Landmark },
+];
 
 const CATEGORIES = [
   { value: 'Alquiler', label: 'Alquiler' },
@@ -13,15 +21,29 @@ const CATEGORIES = [
   { value: 'Servicios', label: 'Servicios' },
 ];
 
+// La API guarda description = "Categoría — concepto" (o solo la categoría si no
+// hay concepto). Antes la pantalla adivinaba la categoría partiendo ese texto:
+// un gasto sin concepto, o una compra a proveedor ("Compra a proveedor: X"),
+// mostraba "EXPENSE" como categoría.
+function splitFlowDescription(flow) {
+  const description = flow.description || '';
+  const category = flow.category || (description.includes(' — ') ? description.split(' — ')[0] : null);
+  let concept = description;
+  if (category && description === category) concept = '';
+  else if (category && description.startsWith(`${category} — `)) concept = description.slice(category.length + 3);
+  return { category: category || 'Otro', concept };
+}
+
 export default function CashFlowPage() {
   const queryClient = useQueryClient();
   const kioskName = useAuthStore((s) => s.user?.kiosk?.name);
   const [page, setPage] = useState(1);
   const limit = 10;
-  const [category, setCategory] = useState('ALQUILER');
+  const [category, setCategory] = useState('Alquiler');
   const [amount, setAmount] = useState('');
   const [description, setDescription] = useState('');
   const [date, setDate] = useState('');
+  const [paidFromCash, setPaidFromCash] = useState(true);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
 
   const { data, isLoading } = useQuery({
@@ -31,6 +53,11 @@ export default function CashFlowPage() {
 
   const [editingId, setEditingId] = useState(null);
 
+  // Antes "Limpiar" ponía la categoría en 'ALQUILER', que no existe en la lista.
+  function resetForm() {
+    setAmount(''); setDescription(''); setDate(''); setCategory('Alquiler'); setPaidFromCash(true);
+  }
+
   const addMutation = useMutation({
     mutationFn: (body) => api.post('/cashflow', body).then((r) => r.data),
     onSuccess: () => {
@@ -38,7 +65,7 @@ export default function CashFlowPage() {
       queryClient.invalidateQueries({ queryKey: ['cashflow'] });
       queryClient.invalidateQueries({ queryKey: ['cash-register-current'] });
       queryClient.invalidateQueries({ queryKey: ['cash-register-history'] });
-      setAmount(''); setDescription(''); setDate(''); setCategory('ALQUILER');
+      resetForm();
     },
     onError: (err) => toast.error('Error guardando gasto'),
   });
@@ -48,38 +75,29 @@ export default function CashFlowPage() {
     if (!amount || Number(amount) <= 0) return toast.error('Ingresá un monto válido');
     if (editingId) {
       // update
-      api.put(`/cashflow/${editingId}`, { amount: Number(amount), concept: description || null, category, date: date || null })
+      api.put(`/cashflow/${editingId}`, { amount: Number(amount), concept: description || null, category, date: date || null, paidFromCash })
         .then(() => {
           toast.success('Gasto actualizado');
           queryClient.invalidateQueries({ queryKey: ['cashflow'] });
           queryClient.invalidateQueries({ queryKey: ['cash-register-current'] });
           queryClient.invalidateQueries({ queryKey: ['cash-register-history'] });
           setEditingId(null);
-          setAmount(''); setDescription(''); setDate(''); setCategory('Alquiler');
+          resetForm();
         }).catch(() => toast.error('Error actualizando gasto'));
       return;
     }
 
-    addMutation.mutate({ type: 'EXPENSE', amount: Number(amount), concept: description || null, category, date: date || null });
+    addMutation.mutate({ type: 'EXPENSE', amount: Number(amount), concept: description || null, category, date: date || null, paidFromCash });
   }
 
   function handleEdit(flow) {
-    // parse description into category and concept if possible
-    let parsedCategory = 'Alquiler';
-    let parsedConcept = '';
-    if (flow.description) {
-      const parts = flow.description.split(' — ');
-      if (parts.length === 1) parsedConcept = parts[0];
-      else {
-        parsedCategory = parts[0];
-        parsedConcept = parts.slice(1).join(' — ');
-      }
-    }
+    const { category: parsedCategory, concept: parsedConcept } = splitFlowDescription(flow);
     setEditingId(flow.id);
     setCategory(parsedCategory);
     setAmount(String(flow.amount));
-    setDescription(parsedConcept || '');
+    setDescription(parsedConcept);
     setDate(new Date(flow.createdAt).toISOString().slice(0,10));
+    setPaidFromCash(flow.paidFromCash !== false);
   }
 
   function handleDelete(id) {
@@ -98,19 +116,12 @@ export default function CashFlowPage() {
       const { data: full } = await api.get('/cashflow', { params: { period: 'month', all: 1 } });
       const flows = full.flows || [];
       const rows = flows.map((f) => {
-        let displayCategory = f.type;
-        let displayConcept = f.description || '';
-        if (f.description) {
-          const parts = f.description.split(' — ');
-          if (parts.length > 1) {
-            displayCategory = parts[0];
-            displayConcept = parts.slice(1).join(' — ');
-          } else displayConcept = parts[0];
-        }
+        const { category: displayCategory, concept: displayConcept } = splitFlowDescription(f);
         return [
           new Date(f.createdAt).toLocaleDateString('es-AR'),
           displayCategory,
           displayConcept || '—',
+          f.paidFromCash === false ? 'Por fuera' : 'Caja',
           fmt(f.amount),
         ];
       });
@@ -120,9 +131,13 @@ export default function CashFlowPage() {
         subtitle: new Date().toLocaleString('es-AR', { month: 'long', year: 'numeric' }),
         kioskName,
         meta: [`Total de gastos: ${flows.length}`],
-        columns: ['Fecha', 'Categoría', 'Descripción', 'Monto'],
+        columns: ['Fecha', 'Categoría', 'Descripción', 'Salió de', 'Monto'],
         rows,
-        summary: [['Total gastado', fmt(full.totals?.expense || 0)]],
+        summary: [
+          ['Pagado con la caja', fmt(full.totals?.expenseFromCash || 0)],
+          ['Pagado por fuera de la caja', fmt(full.totals?.expenseOutsideCash || 0)],
+          ['Total gastado', fmt(full.totals?.expense || 0)],
+        ],
         filename: `gastos-${new Date().toISOString().slice(0, 7)}.pdf`,
       });
     } catch {
@@ -144,6 +159,7 @@ export default function CashFlowPage() {
                 <label className="field-label">Categoría</label>
                 <select value={category} onChange={(e) => setCategory(e.target.value)} className="field-input">
                   {CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+                  {!CATEGORIES.some((c) => c.value === category) && <option value={category}>{category}</option>}
                 </select>
               </div>
               <div className="field-group">
@@ -155,12 +171,38 @@ export default function CashFlowPage() {
                 <input value={description} onChange={(e) => setDescription(e.target.value)} className="field-input" />
               </div>
               <div className="field-group">
+                <label className="field-label">¿Salió de la caja?</label>
+                <div className="grid grid-cols-2 gap-2">
+                  {PAID_FROM_OPTIONS.map(({ value, label, hint, icon: Icon }) => (
+                    <button
+                      key={String(value)}
+                      type="button"
+                      onClick={() => setPaidFromCash(value)}
+                      aria-pressed={paidFromCash === value}
+                      className={`rounded-lg border-2 px-3 py-2 text-left transition ${
+                        paidFromCash === value
+                          ? 'border-brand-navy bg-brand-navy text-white'
+                          : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50'
+                      }`}
+                    >
+                      <span className="flex items-center gap-1.5 text-sm font-700"><Icon size={15} />{label}</span>
+                      <span className={`block text-xs mt-0.5 ${paidFromCash === value ? 'text-slate-300' : 'text-gray-500'}`}>{hint}</span>
+                    </button>
+                  ))}
+                </div>
+                <p className="text-xs text-gray-500">
+                  {paidFromCash
+                    ? 'Se descuenta del efectivo esperado al cerrar la caja.'
+                    : 'Cuenta en los resultados del mes, pero no toca el arqueo de la caja.'}
+                </p>
+              </div>
+              <div className="field-group">
                 <label className="field-label">Fecha (opcional)</label>
                 <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="field-input" />
               </div>
               <div className="flex items-center gap-2">
-                <button className="btn-primary" type="submit" disabled={addMutation.isLoading}>{addMutation.isLoading ? 'Guardando...' : 'Registrar gasto'}</button>
-                <button type="button" onClick={() => { setAmount(''); setDescription(''); setDate(''); setCategory('ALQUILER'); }} className="btn-outline">Limpiar</button>
+                <button className="btn-primary" type="submit" disabled={addMutation.isPending}>{addMutation.isPending ? 'Guardando...' : editingId ? 'Guardar cambios' : 'Registrar gasto'}</button>
+                <button type="button" onClick={() => { setEditingId(null); resetForm(); }} className="btn-outline">Limpiar</button>
               </div>
             </form>
           </div>
@@ -189,26 +231,24 @@ export default function CashFlowPage() {
                         <th className="th">Fecha</th>
                         <th className="th">Categoría</th>
                         <th className="th">Descripción</th>
+                        <th className="th">Salió de</th>
                         <th className="th text-right">Monto</th>
                         <th className="th w-20"></th>
                       </tr>
                     </thead>
                     <tbody>
                       {(data?.flows || []).map((f) => {
-                        let displayCategory = f.type;
-                        let displayConcept = f.description || '';
-                        if (f.description) {
-                          const parts = f.description.split(' — ');
-                          if (parts.length > 1) {
-                            displayCategory = parts[0];
-                            displayConcept = parts.slice(1).join(' — ');
-                          } else displayConcept = parts[0];
-                        }
+                        const { category: displayCategory, concept: displayConcept } = splitFlowDescription(f);
                         return (
                           <tr key={f.id} className="hover:bg-gray-50">
                             <td className="td">{new Date(f.createdAt).toLocaleDateString()}</td>
                             <td className="td">{displayCategory}</td>
                             <td className="td text-gray-600">{displayConcept || '—'}</td>
+                            <td className="td">
+                              {f.paidFromCash === false
+                                ? <span className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs whitespace-nowrap bg-slate-100 text-slate-700"><Landmark size={12} />Por fuera</span>
+                                : <span className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs whitespace-nowrap bg-green-100 text-green-700"><Banknote size={12} />Caja</span>}
+                            </td>
                             <td className="td text-right font-700">{fmt(f.amount)}</td>
                             <td className="td text-right">
                               <div className="inline-flex gap-2">
@@ -222,6 +262,14 @@ export default function CashFlowPage() {
                     </tbody>
                   </table>
                 </div>
+
+                {(data?.total || 0) > 0 && (
+                  <div className="mt-4 flex flex-wrap gap-x-6 gap-y-1 text-sm">
+                    <span className="text-gray-500">Total del mes: <strong className="text-gray-800">{fmt(data?.totals?.expense || 0)}</strong></span>
+                    <span className="text-gray-500">De la caja: <strong className="text-gray-800">{fmt(data?.totals?.expenseFromCash || 0)}</strong></span>
+                    <span className="text-gray-500">Por fuera: <strong className="text-gray-800">{fmt(data?.totals?.expenseOutsideCash || 0)}</strong></span>
+                  </div>
+                )}
 
                 <div className="mt-4 flex items-center justify-between gap-3 flex-wrap">
                   <div className="text-sm text-gray-500">

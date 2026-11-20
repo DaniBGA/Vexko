@@ -22,12 +22,20 @@ import ClientDetailPage from './components/screens/ClientDetailPage.jsx';
 import AdminPage from './components/screens/AdminPage.jsx';
 import AdminLoginPage from './components/screens/AdminLoginPage.jsx';
 import { useAdminAuthStore } from './store/adminAuthStore.js';
+import { SubscriptionBlockedPage } from './components/subscription/SubscriptionNotices.jsx';
+import { SUBSCRIPTION_BLOCKED_EVENT } from './lib/api.js';
+import { Spinner } from './components/ui/index.jsx';
 
 const PLAN_LEVELS = { BASE: 0, INTERMEDIO: 1, PREMIUM: 2 };
 
 function PlanRoute({ minPlan = 0, children }) {
   const user = useAuthStore((s) => s.user);
-  const plan = String(user?.kiosk?.customer?.plan || 'BASE').toUpperCase();
+  // Al recargar la página (F5) el usuario llega recién con /auth/me. Antes se lo
+  // tomaba como BASE mientras tanto y una sucursal premium que recargaba en
+  // Clientes o Historial terminaba en /venta. Si /me falla, la sesión se cierra
+  // y PrivateRoute manda al login, así que esto no queda cargando para siempre.
+  if (!user) return <Spinner />;
+  const plan = String(user.kiosk?.customer?.plan || 'BASE').toUpperCase();
   const level = PLAN_LEVELS[plan] ?? 0;
   return level >= minPlan ? children : <Navigate to="/venta" replace />;
 }
@@ -39,7 +47,11 @@ function AdminPrivateRoute({ children }) {
 
 function PrivateRoute({ children }) {
   const token = useAuthStore((s) => s.token);
+  const subscription = useAuthStore((s) => s.user?.kiosk?.customer?.subscription);
   const location = useLocation();
+  // Suscripción vencida: en lugar de la app se muestra la pantalla de bloqueo
+  // (el backend igual rechaza todo con 402).
+  if (token && subscription?.status === 'BLOCKED') return <SubscriptionBlockedPage subscription={subscription} />;
   if (token) return children;
   // Anonymous visitors landing on the bare root see the public landing page
   // instead of being bounced to /login; deep links still redirect to login.
@@ -58,6 +70,14 @@ export default function App() {
   useEffect(() => {
     if (adminToken) fetchAdminMe();
   }, []);
+
+  // Si la suscripción se vence con la app abierta, la próxima request recibe
+  // un 402: se refresca /auth/me para pasar a la pantalla de bloqueo.
+  useEffect(() => {
+    const onBlocked = () => fetchMe();
+    window.addEventListener(SUBSCRIPTION_BLOCKED_EVENT, onBlocked);
+    return () => window.removeEventListener(SUBSCRIPTION_BLOCKED_EVENT, onBlocked);
+  }, [fetchMe]);
 
   return (
     <BrowserRouter>

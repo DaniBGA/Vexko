@@ -7,12 +7,12 @@ export function fmt(v) {
 
 export function PageHeader({ title, subtitle, children }) {
   return (
-    <div className="p-6 border-b bg-white flex items-center justify-between">
+    <div className="p-4 md:p-6 border-b bg-white flex flex-wrap items-center justify-between gap-3">
       <div className="flex items-center gap-3 flex-wrap">
         <h1 className="text-xl font-700">{title}</h1>
         {subtitle && <span className="text-sm text-gray-500">{subtitle}</span>}
       </div>
-      <div className="flex items-center gap-2">{children}</div>
+      <div className="flex flex-wrap items-center gap-2">{children}</div>
     </div>
   );
 }
@@ -23,7 +23,7 @@ export function Spinner() {
 
 export function Badge({ children, variant }) {
   const cls = variant === 'low' ? 'bg-red-100 text-red-700' : variant === 'alert' ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700';
-  return <span className={`px-2 py-1 rounded text-xs ${cls}`}>{children}</span>;
+  return <span className={`px-2 py-1 rounded text-xs whitespace-nowrap ${cls}`}>{children}</span>;
 }
 
 export function EmptyState({ icon: Icon, title, description }) {

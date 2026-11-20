@@ -5,6 +5,12 @@ import bcrypt from 'bcryptjs';
 const prisma = new PrismaClient();
 
 async function main() {
+  // Crea cuentas con contraseñas publicadas en el README (admin@kiosco.com /
+  // kiosco123 y las sucursales demo). En producción el admin se crea con
+  // `npm run admin:create` y el catálogo con `npm run db:seed:catalog`.
+  if (process.env.NODE_ENV === 'production' && process.env.ALLOW_DEMO_SEED !== '1') {
+    throw new Error('El seed de demo no corre en producción (crea cuentas con contraseñas públicas). Usá `npm run admin:create` y `npm run db:seed:catalog`. Si de verdad querés datos de demo acá: ALLOW_DEMO_SEED=1.');
+  }
   console.log('🌱 Iniciando seed...');
 
   // ─── Usuario dueño ────────────────────────────────────────────────────────
@@ -102,16 +108,17 @@ async function main() {
   // ─── Proveedores ──────────────────────────────────────────────────────────
   // Con kioskId: antes quedaban sin sucursal asociada y no aparecían en
   // "Proveedores" de ningún kiosco.
+  // El nombre del proveedor es único por sucursal (kioskId + name).
   const gonzalez = await prisma.supplier.upsert({
-    where: { name: 'Distribuidora González' }, update: { kioskId: kiosk.id },
+    where: { kioskId_name: { kioskId: kiosk.id, name: 'Distribuidora González' } }, update: {},
     create: { name: 'Distribuidora González', phone: '249-555-1234', kioskId: kiosk.id },
   });
   const arcor = await prisma.supplier.upsert({
-    where: { name: 'Arcor' }, update: { kioskId: kiosk.id },
+    where: { kioskId_name: { kioskId: kiosk.id, name: 'Arcor' } }, update: {},
     create: { name: 'Arcor', phone: '011-5555-1234', email: 'juan@arcor.com', kioskId: kiosk.id },
   });
   const serenisima = await prisma.supplier.upsert({
-    where: { name: 'La Serenísima' }, update: { kioskId: kiosk.id },
+    where: { kioskId_name: { kioskId: kiosk.id, name: 'La Serenísima' } }, update: {},
     create: { name: 'La Serenísima', phone: '0800-333-5544', kioskId: kiosk.id },
   });
   console.log('✓ Proveedores creados');
@@ -163,7 +170,7 @@ async function main() {
   const existingLoyaltyRule = await prisma.loyaltyRule.findFirst({ where: { kioskId: kiosk.id } });
   if (!existingLoyaltyRule) {
     await prisma.loyaltyRule.create({
-      data: { kioskId: kiosk.id, amountPerPoint: 100, pointsForDiscount: 50, discountAmount: 500 },
+      data: { kioskId: kiosk.id, amountPerPoint: 100, pointsForDiscount: 50, discountPercent: 10 },
     });
   }
 

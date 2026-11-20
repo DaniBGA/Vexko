@@ -194,6 +194,7 @@ export default function ProductFormPage() {
           stock: data.stock,
           minStock: data.minStock,
           price: data.salePrice,
+          cost: data.costPrice,
         }).then((r) => r.data);
       }
       return api.post('/products', data).then((r) => r.data);
@@ -203,6 +204,11 @@ export default function ProductFormPage() {
       queryClient.invalidateQueries({ queryKey: ['products'] });
       queryClient.invalidateQueries({ queryKey: ['catalog'] });
       queryClient.invalidateQueries({ queryKey: ['catalog-products'] });
+      // Sin invalidar el detalle, volver a abrir el mismo producto dentro de
+      // los 30 s mostraba los datos viejos (y guardarlo los volvía a escribir).
+      queryClient.invalidateQueries({ queryKey: ['product'] });
+      queryClient.invalidateQueries({ queryKey: ['products-search'] });
+      queryClient.invalidateQueries({ queryKey: ['supplier-order-products'] });
       if (customMode) {
         navigate(`${returnTo}?search=${encodeURIComponent(form.name)}`);
         return;
@@ -214,7 +220,9 @@ export default function ProductFormPage() {
   const { mutate: removeFromCommerce, isPending: isRemoving } = useMutation({
     mutationFn: () => api.delete(`/products/${id}`),
     onSuccess: () => {
-      toast.success('Producto quitado de productos propios');
+      toast.success(product?.isCustom ? 'Producto quitado de productos propios' : 'Producto quitado de tu stock');
+      queryClient.invalidateQueries({ queryKey: ['product'] });
+      queryClient.invalidateQueries({ queryKey: ['products-search'] });
       queryClient.invalidateQueries({ queryKey: ['products'] });
       queryClient.invalidateQueries({ queryKey: ['catalog'] });
       queryClient.invalidateQueries({ queryKey: ['catalog-products'] });
@@ -231,7 +239,13 @@ export default function ProductFormPage() {
   const unitCost = usingPackMode
     ? (packUnits > 0 ? packPrice / packUnits : 0)
     : toNumber(form.unitCost);
-  const stockUnits = usingPackMode ? (packUnits * packCount) : toNumber(form.unitStock);
+  // "Cantidad de packs" solo define el stock en el ALTA. Al editar, el stock
+  // es el actual de la sucursal (campo propio): antes se recalculaba siempre
+  // como unidades × packs de la carga inicial, y editar el precio de un
+  // producto por pack borraba todo lo vendido o recibido desde entonces.
+  const editingStock = !isNew;
+  const initialStock = product ? Number(product.stock ?? 0) : null;
+  const stockUnits = usingPackMode && !editingStock ? (packUnits * packCount) : toNumber(form.unitStock);
   const salePriceFromPercentage = unitCost > 0 && form.salePercent !== ''
     ? unitCost * (1 + toNumber(form.salePercent) / 100)
     : 0;
@@ -247,8 +261,13 @@ export default function ProductFormPage() {
 
     if (!form.name.trim()) return toast.error('Completá el nombre');
     if (usingPackMode) {
-      if (!packPrice || !packUnits || !packCount) {
-        return toast.error('Completá precio por pack, unidades por pack y cantidad de packs');
+      if (!packPrice || !packUnits || (!editingStock && !packCount)) {
+        return toast.error(editingStock
+          ? 'Completá precio por pack y unidades por pack'
+          : 'Completá precio por pack, unidades por pack y cantidad de packs');
+      }
+      if (editingStock && form.unitStock === '') {
+        return toast.error('Completá el stock actual en unidades');
       }
     } else {
       if (form.unitCost === '') {
@@ -273,7 +292,10 @@ export default function ProductFormPage() {
       packCount: usingPackMode ? Math.trunc(packCount) : null,
       costPrice: unitCost,
       salePrice: salePriceValue,
-      stock: stockUnits,
+      // Al editar, el stock viaja solo si se cambió en el formulario: si no,
+      // una venta hecha mientras el formulario estaba abierto se pisaba con
+      // el stock viejo que se había cargado al abrirlo.
+      stock: !editingStock || stockUnits !== initialStock ? Math.trunc(stockUnits) : undefined,
       minStock: toNumber(form.minStock),
       expiresAt: form.expiresAt || null,
       description: form.description,
@@ -401,10 +423,12 @@ export default function ProductFormPage() {
                         <label className="field-label">Unidades del pack *</label>
                         <input type="number" min="1" step="1" value={form.packUnits} onChange={(e) => set('packUnits', e.target.value)} className="field-input" />
                       </div>
-                      <div className="field-group">
-                        <label className="field-label">Cantidad de packs *</label>
-                        <input type="number" min="0" step="1" value={form.packCount} onChange={(e) => set('packCount', e.target.value)} className="field-input" />
-                      </div>
+                      {!editingStock && (
+                        <div className="field-group">
+                          <label className="field-label">Cantidad de packs *</label>
+                          <input type="number" min="0" step="1" value={form.packCount} onChange={(e) => set('packCount', e.target.value)} className="field-input" />
+                        </div>
+                      )}
                       <div className="field-group">
                         <label className="field-label">Precio por unidad</label>
                         <input value={unitCost ? unitCost.toFixed(2) : ''} readOnly className="field-input bg-gray-50" />
@@ -412,10 +436,17 @@ export default function ProductFormPage() {
                     </div>
 
                     <div className="grid grid-cols-2 gap-3">
-                      <div className="field-group">
-                        <label className="field-label">Stock en unidades</label>
-                        <input value={stockUnits ? stockUnits.toFixed(0) : '0'} readOnly className="field-input bg-gray-50" />
-                      </div>
+                      {editingStock ? (
+                        <div className="field-group">
+                          <label className="field-label">Stock actual (unidades) *</label>
+                          <input type="number" min="0" step="1" value={form.unitStock} onChange={(e) => set('unitStock', e.target.value)} className="field-input" />
+                        </div>
+                      ) : (
+                        <div className="field-group">
+                          <label className="field-label">Stock en unidades</label>
+                          <input value={stockUnits ? stockUnits.toFixed(0) : '0'} readOnly className="field-input bg-gray-50" />
+                        </div>
+                      )}
                       <div className="field-group">
                         <label className="field-label">Stock mínimo</label>
                         <input type="number" min="0" step="1" value={form.minStock} onChange={(e) => set('minStock', e.target.value)} className="field-input" />

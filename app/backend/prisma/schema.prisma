@@ -21,8 +21,46 @@ model Customer {
   kiosks    Kiosk[]
   products  Product[]
   categories Category[]
+  // Suscripción mensual a VEXKO (ver backend/lib/subscription.js). El ciclo
+  // arranca en el último pago (o en subscriptionStartedAt si todavía no hay
+  // pagos): vence al mes, tiene 10 días de gracia con aviso y después se
+  // inhabilita la app para todas las sucursales del cliente.
+  subscriptionStartedAt DateTime @default(now())
+  // Denormalizado de SubscriptionPayment (el paidAt más reciente) para no
+  // consultar los pagos en cada request autenticada.
+  lastPaymentAt         DateTime?
+  // Cuentas que no se cobran (demo, internas): nunca se avisa ni se bloquea.
+  subscriptionExempt    Boolean  @default(false)
+  subscriptionPayments  SubscriptionPayment[]
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
+}
+
+// Un pago de la cuota mensual, registrado a mano desde el panel admin.
+model SubscriptionPayment {
+  id         String   @id @default(cuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  paidAt     DateTime
+  amount     Float?
+  note       String?
+  createdAt  DateTime @default(now())
+
+  @@index([customerId, paidAt])
+}
+
+// Configuración global de VEXKO que se edita desde el panel admin (una sola
+// fila, id "global"). Es pública a propósito (GET /api/public/settings): la
+// usan la landing (precios) y la pantalla de suscripción vencida (WhatsApp).
+model AppSettings {
+  id              String   @id @default("global")
+  // Solo dígitos, con código de país (ej. 5492494000000), listo para wa.me.
+  whatsappNumber  String?
+  // Precio mensual de cada plan, en pesos. null = "Próximamente" en la landing.
+  priceBase       Float?
+  priceIntermedio Float?
+  pricePremium    Float?
+  updatedAt       DateTime @updatedAt
 }
 
 model Kiosk {
@@ -42,6 +80,7 @@ model Kiosk {
   cashFlows   CashFlow[]
   employees   Employee[]
   loyaltyRules LoyaltyRule[]
+  clientDebts ClientDebt[]
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
 
@@ -132,6 +171,7 @@ model KioskProduct {
   stock          Int      @default(0)
   minStock       Int      @default(0)
   price          Float?
+  cost           Float?
   barcodePrinted Boolean  @default(false)
   kiosk          Kiosk    @relation(fields: [kioskId], references: [id], onDelete: Cascade)
   product        Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
@@ -154,6 +194,9 @@ model Sale {
   cashReceived  Float?
   changeGiven   Float?
   pointsEarned  Int      @default(0)
+  discountAmount Float?
+  redemptionId  String?    @unique
+  redemption    PointRedemption? @relation(fields: [redemptionId], references: [id])
   kioskId       String
   kiosk         Kiosk      @relation(fields: [kioskId], references: [id])
   userId        String
@@ -177,6 +220,12 @@ model SaleItem {
   id         String   @id @default(cuid())
   quantity   Int
   unitPrice  Float
+  // Costo unitario al momento de la venta (KioskProduct.cost ?? Product.costPrice).
+  // Antes los reportes calculaban el costo de lo vendido con el costPrice
+  // ACTUAL del Product global — que en el catálogo global es null — así que
+  // la ganancia bruta daba igual a la facturación, y además cambiar el costo
+  // de un producto reescribía la ganancia de meses ya cerrados.
+  unitCost   Float?
   subtotal   Float
   saleId     String
   productId  String
@@ -189,9 +238,12 @@ model SaleItem {
   @@index([saleId, productId])
 }
 
+// El nombre es único por sucursal, no global: antes era @unique a nivel de
+// toda la base, así que si un negocio ya tenía "Arcor" cargado, ningún otro
+// cliente podía crear un proveedor con ese nombre (fallaba con "ya existe").
 model Supplier {
   id        String   @id @default(cuid())
-  name      String   @unique
+  name      String
   phone     String?
   email     String?
   address   String?
@@ -203,6 +255,7 @@ model Supplier {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@unique([kioskId, name])
   @@index([kioskId])
 }
 
@@ -228,6 +281,9 @@ model CashFlow {
   amount    Float
   description String?
   category  String?
+  // false = se pagó por fuera de la caja (transferencia, débito...): cuenta como
+  // gasto en los reportes, pero no se resta del efectivo esperado del arqueo.
+  paidFromCash Boolean @default(true)
   kioskId   String
   kiosk     Kiosk    @relation(fields: [kioskId], references: [id])
   createdAt DateTime @default(now())
@@ -270,11 +326,45 @@ model Client {
   kiosk       Kiosk    @relation(fields: [kioskId], references: [id], onDelete: Cascade)
   sales       Sale[]   @relation("ClientSales")
   redemptions PointRedemption[]
+  debts       ClientDebt[]
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   @@unique([kioskId, phone])
   @@index([kioskId])
+}
+
+// Fiado: un cliente se lleva mercadería y queda debiendo. Cada deuda es su
+// propia fila (no un único saldo acumulado en Client) para poder mostrar el
+// historial y permitir pagos parciales contra una deuda puntual en vez de
+// un pozo común.
+model ClientDebt {
+  id          String   @id @default(cuid())
+  clientId    String
+  kioskId     String
+  amount      Float
+  paidAmount  Float    @default(0)
+  status      String   @default("PENDING") // PENDING | PARTIAL | PAID
+  note        String?
+  client      Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  kiosk       Kiosk    @relation(fields: [kioskId], references: [id], onDelete: Cascade)
+  payments    ClientDebtPayment[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([clientId])
+  @@index([kioskId])
+  @@index([kioskId, status])
+}
+
+model ClientDebtPayment {
+  id        String     @id @default(cuid())
+  debtId    String
+  amount    Float
+  debt      ClientDebt @relation(fields: [debtId], references: [id], onDelete: Cascade)
+  createdAt DateTime   @default(now())
+
+  @@index([debtId])
 }
 
 // La regla de fidelización es por sucursal: antes era una única fila global
@@ -286,20 +376,32 @@ model LoyaltyRule {
   kiosk             Kiosk    @relation(fields: [kioskId], references: [id], onDelete: Cascade)
   amountPerPoint    Float
   pointsForDiscount Int
-  discountAmount    Float
+  discountPercent   Float
   active            Boolean  @default(true)
   createdAt         DateTime @default(now())
 
   @@index([kioskId])
 }
 
+// Canjear puntos ya no descuenta el saldo del cliente al toque: genera un
+// código (numérico + código de barra) en estado PENDING que el cliente
+// presenta en su próxima compra. Al registrar esa venta, el cajero carga el
+// código y recién ahí se marca USED y se aplica el descuento al total —
+// así el código funciona como un cupón real, no como un descuento invisible
+// que se aplicaba solo.
 model PointRedemption {
-  id        String   @id @default(cuid())
-  clientId  String
+  id         String    @id @default(cuid())
+  clientId   String
   pointsUsed Int
-  discount  Float
-  createdAt DateTime @default(now())
-  client    Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  discount   Float
+  code       String    @unique
+  status     String    @default("PENDING") // PENDING | USED
+  usedAt     DateTime?
+  createdAt  DateTime  @default(now())
+  client     Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  sale       Sale?
+
+  @@index([clientId])
 }
 
 model Invoice {

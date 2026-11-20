@@ -5,7 +5,6 @@ import toast from 'react-hot-toast';
 import { format } from 'date-fns';
 import { es } from 'date-fns/locale';
 import {
-  AlertTriangle,
   CircleDollarSign,
   CreditCard,
   Eye,
@@ -93,7 +92,9 @@ export default function HistoryPage() {
   const total = data?.total || 0;
   const totalPages = data?.totalPages || 1;
   const currentPage = data?.page || page;
-  const totalRevenue = sales.reduce((sum, sale) => sum + parseFloat(sale.total), 0);
+  // Suma de TODAS las ventas (viene de la API). Antes se sumaba solo la página
+  // actual y se mostraba al lado del total de ventas, como si fuera de todas.
+  const totalRevenue = data?.totalRevenue || 0;
 
   useEffect(() => {
     if (data?.page && data.page !== page) {
@@ -128,14 +129,35 @@ export default function HistoryPage() {
     enabled: isEditing && editSearchTerm.length >= 1,
   });
 
+  // Total de la venta editada con el mismo descuento del cupón que aplica el
+  // backend al recalcular. Antes se usaba el subtotal sin descuento: en una
+  // venta con cupón el total mostrado no coincidía con el guardado y el pago
+  // mixto nunca validaba ("la suma de los medios debe coincidir").
+  const redemptionPercent = Math.min(100, Math.max(0, parseFloat(saleDetailQuery.data?.redemption?.discount) || 0));
+  function calcEditTotal(items) {
+    const subtotal = items.reduce((sum, item) => sum + item.salePrice * item.quantity, 0);
+    const discount = Math.round(subtotal * (redemptionPercent / 100) * 100) / 100;
+    return Math.round((subtotal - discount) * 100) / 100;
+  }
+
+  // Editar o borrar una venta mueve stock y puntos/gasto del cliente.
+  function invalidateAfterSaleChange() {
+    queryClient.invalidateQueries({ queryKey: ['sales'] });
+    queryClient.invalidateQueries({ queryKey: ['cash-register-current'] });
+    queryClient.invalidateQueries({ queryKey: ['cash-register-history'] });
+    queryClient.invalidateQueries({ queryKey: ['reports'] });
+    queryClient.invalidateQueries({ queryKey: ['products'] });
+    queryClient.invalidateQueries({ queryKey: ['products-search'] });
+    queryClient.invalidateQueries({ queryKey: ['product'] });
+    queryClient.invalidateQueries({ queryKey: ['clients'] });
+    queryClient.invalidateQueries({ queryKey: ['client'] });
+  }
+
   const { mutate: updateSale, isPending: isUpdating } = useMutation({
     mutationFn: (body) => api.put(`/sales/${selectedSaleId}`, body).then((r) => r.data),
     onSuccess: () => {
       toast.success('Venta actualizada');
-      queryClient.invalidateQueries({ queryKey: ['sales'] });
-      queryClient.invalidateQueries({ queryKey: ['cash-register-current'] });
-      queryClient.invalidateQueries({ queryKey: ['cash-register-history'] });
-      queryClient.invalidateQueries({ queryKey: ['reports'] });
+      invalidateAfterSaleChange();
       queryClient.invalidateQueries({ queryKey: ['sale-detail', selectedSaleId] });
       closeModal();
     },
@@ -145,10 +167,7 @@ export default function HistoryPage() {
     mutationFn: () => api.delete(`/sales/${selectedSaleId}`).then((r) => r.data),
     onSuccess: () => {
       toast.success('Venta eliminada');
-      queryClient.invalidateQueries({ queryKey: ['sales'] });
-      queryClient.invalidateQueries({ queryKey: ['cash-register-current'] });
-      queryClient.invalidateQueries({ queryKey: ['cash-register-history'] });
-      queryClient.invalidateQueries({ queryKey: ['reports'] });
+      invalidateAfterSaleChange();
       closeModal();
     },
   });
@@ -231,7 +250,7 @@ export default function HistoryPage() {
       return toast.error('La venta debe tener al menos un producto');
     }
 
-    const total = editForm.items.reduce((sum, item) => sum + item.salePrice * item.quantity, 0);
+    const total = calcEditTotal(editForm.items);
     if (editForm.paymentMethod === 'MIXED') {
       const mixedTotal = [editForm.cashAmount, editForm.transferAmount, editForm.cardAmount].reduce(
         (sum, value) => sum + (parseFloat(value || 0) || 0),
@@ -242,12 +261,14 @@ export default function HistoryPage() {
       }
     }
 
+    // Parciales solo en mixto: en un pago de un medio, el backend usa el total.
+    const isMixed = editForm.paymentMethod === 'MIXED';
     updateSale({
       items: editForm.items.map((item) => ({ productId: item.productId, quantity: item.quantity })),
       paymentMethod: editForm.paymentMethod,
-      cashAmount: parseAmount(editForm.cashAmount),
-      transferAmount: parseAmount(editForm.transferAmount),
-      cardAmount: parseAmount(editForm.cardAmount),
+      cashAmount: isMixed ? parseAmount(editForm.cashAmount) : undefined,
+      transferAmount: isMixed ? parseAmount(editForm.transferAmount) : undefined,
+      cardAmount: isMixed ? parseAmount(editForm.cardAmount) : undefined,
       clientId: editForm.clientId || null,
     });
   }
@@ -264,6 +285,8 @@ export default function HistoryPage() {
       const { data: full } = await api.get('/sales', { params: { all: 1 } });
       const allSales = full.sales || [];
       const revenueTotal = allSales.reduce((sum, sale) => sum + parseFloat(sale.total), 0);
+      // El PDF trae hasta 500 ventas (las más recientes); si hay más, se aclara.
+      const isPartial = (full.total || 0) > allSales.length;
       const rows = allSales.map((sale) => [
         format(new Date(sale.createdAt), 'dd/MM/yyyy HH:mm', { locale: es }),
         sale.items.map((item) => item.product.name).join(', '),
@@ -273,12 +296,12 @@ export default function HistoryPage() {
       ]);
       downloadPdfReport({
         title: 'Historial de ventas',
-        subtitle: `Últimos ${full.maxHistoryMonths || 2} meses`,
+        subtitle: isPartial ? `Últimas ${allSales.length} ventas` : 'Todas las ventas',
         kioskName,
-        meta: [`Total de ventas: ${allSales.length}`],
+        meta: [isPartial ? `Ventas en el PDF: ${allSales.length} de ${full.total}` : `Total de ventas: ${allSales.length}`],
         columns: ['Fecha', 'Productos', 'Pago', 'Cliente', 'Total'],
         rows,
-        summary: [['Ingresos totales', fmt(revenueTotal)]],
+        summary: [[isPartial ? 'Ingresos de estas ventas' : 'Ingresos totales', fmt(revenueTotal)]],
         filename: `historial-ventas-${new Date().toISOString().slice(0, 10)}.pdf`,
       });
     } catch {
@@ -294,7 +317,7 @@ export default function HistoryPage() {
   const selectedMeta = paymentMetaFor(selectedSale?.paymentMethod);
   const modalItems = isEditing ? editForm.items : selectedItems;
   const modalTotal = isEditing
-    ? editForm.items.reduce((sum, item) => sum + item.salePrice * item.quantity, 0)
+    ? calcEditTotal(editForm.items)
     : selectedTotal;
 
   return (
@@ -311,19 +334,11 @@ export default function HistoryPage() {
         </button>
       </PageHeader>
       <div className="flex-1 overflow-y-auto p-6 space-y-4">
-        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900 flex items-start gap-3">
-          <AlertTriangle size={18} className="mt-0.5 flex-shrink-0" />
-          <div className="text-sm">
-            <div className="font-700">Aviso importante</div>
-            <div>Los datos que superen los 2 meses de antiguedad seran eliminados.</div>
-          </div>
-        </div>
-
         <div className="card">
           <div className="card-header">
             <div>
               <h3 className="card-title">{total} ventas</h3>
-              <p className="text-xs text-gray-400">Se muestran solo los ultimos 2 meses.</p>
+              <p className="text-xs text-gray-400">Historial completo de la sucursal, de la más reciente a la más vieja.</p>
             </div>
             <span className="text-sm font-700 text-brand-green">{fmt(totalRevenue)}</span>
           </div>
@@ -354,7 +369,12 @@ export default function HistoryPage() {
                       return (
                         <tr key={sale.id} className="hover:bg-gray-50">
                           <td className="td text-gray-400 whitespace-nowrap">
-                            {format(new Date(sale.createdAt), 'HH:mm · dd/MM', { locale: es })}
+                            {/* Con el historial completo hay ventas de otros años: ahí se agrega el año */}
+                            {format(
+                              new Date(sale.createdAt),
+                              new Date(sale.createdAt).getFullYear() === new Date().getFullYear() ? 'HH:mm · dd/MM' : 'HH:mm · dd/MM/yyyy',
+                              { locale: es },
+                            )}
                           </td>
                           <td className="td text-sm">
                             <div className="max-w-[360px] truncate">

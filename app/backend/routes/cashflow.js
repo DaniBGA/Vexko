@@ -6,6 +6,43 @@ import { requireAuth, resolveRequestKiosk } from '../middleware/auth.js';
 export const cashFlowRouter = Router();
 cashFlowRouter.use(requireAuth);
 
+// El input <input type="date"> del frontend manda solo "YYYY-MM-DD". Un
+// `new Date("YYYY-MM-DD")` lo interpreta como medianoche UTC — en Argentina
+// (UTC-3) eso cae en las 21hs del día ANTERIOR, así que un gasto cargado con
+// la fecha de "hoy" terminaba con un createdAt de ayer a la noche: quedaba
+// antes de que se abriera la caja del día y no se reflejaba en "Gastos del
+// turno". Se combina la fecha elegida con la hora actual (en vez de
+// medianoche) para que "hoy" caiga siempre dentro del turno abierto.
+function resolveExpenseDate(dateStr) {
+  if (!dateStr) return undefined;
+  const [year, month, day] = String(dateStr).split('-').map(Number);
+  if (!year || !month || !day) return undefined;
+  const now = new Date();
+  return new Date(year, month - 1, day, now.getHours(), now.getMinutes(), now.getSeconds(), now.getMilliseconds());
+}
+
+function toLocalDateString(date) {
+  const d = new Date(date);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+const FLOW_TYPES = ['INCOME', 'EXPENSE'];
+
+// "¿Salió de la caja?": por defecto sí (era el único comportamiento antes de
+// existir el campo). Acepta booleano o los strings que manda un form.
+function parsePaidFromCash(value) {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (value === true || value === 'true' || value === '1' || value === 1) return true;
+  if (value === false || value === 'false' || value === '0' || value === 0) return false;
+  return undefined;
+}
+
+function parseFlowAmount(value) {
+  const amount = parseFloat(value);
+  return Number.isFinite(amount) && amount > 0 ? Math.round(amount * 100) / 100 : null;
+}
+
 cashFlowRouter.get('/', async (req, res, next) => {
   try {
     const { period = 'month' } = req.query;
@@ -25,7 +62,7 @@ cashFlowRouter.get('/', async (req, res, next) => {
     }
 
     const where = { kioskId: kiosk.id, createdAt: { gte: from } };
-    const [flows, total, totalsByType] = await Promise.all([
+    const [flows, total, totalsByType, outsideCash] = await Promise.all([
       prisma.cashFlow.findMany({
         where,
         include: { kiosk: { select: { name: true } } },
@@ -37,6 +74,10 @@ cashFlowRouter.get('/', async (req, res, next) => {
       prisma.cashFlow.groupBy({
         by: ['type'],
         where,
+        _sum: { amount: true },
+      }),
+      prisma.cashFlow.aggregate({
+        where: { ...where, type: 'EXPENSE', paidFromCash: false },
         _sum: { amount: true },
       }),
     ]);
@@ -53,9 +94,15 @@ cashFlowRouter.get('/', async (req, res, next) => {
 
     const totalPages = total === 0 ? 0 : Math.ceil(total / limit);
 
+    const expenseOutsideCash = parseFloat(outsideCash._sum.amount || 0);
     res.json({
       flows,
-      totals: { ...totals, balance: totals.income - totals.expense },
+      totals: {
+        ...totals,
+        balance: totals.income - totals.expense,
+        expenseFromCash: totals.expense - expenseOutsideCash,
+        expenseOutsideCash,
+      },
       page,
       limit,
       total,
@@ -66,9 +113,17 @@ cashFlowRouter.get('/', async (req, res, next) => {
 
 cashFlowRouter.post('/', async (req, res, next) => {
   try {
-    const { type, amount, concept, category, date } = req.body;
+    const { concept, category, date } = req.body;
     const kiosk = await resolveRequestKiosk(req);
     if (!kiosk) return res.status(400).json({ error: 'No hay kiosko configurado' });
+
+    // Antes no se validaba nada: un monto vacío o negativo se guardaba (o
+    // rompía con un 500) y un gasto negativo SUMABA al efectivo esperado de
+    // la caja.
+    const type = String(req.body.type || 'EXPENSE').toUpperCase();
+    if (!FLOW_TYPES.includes(type)) return res.status(400).json({ error: 'Tipo de movimiento inválido' });
+    const amount = parseFlowAmount(req.body.amount);
+    if (amount === null) return res.status(400).json({ error: 'Ingresá un monto mayor a cero' });
 
     const descriptionParts = [];
     if (category) descriptionParts.push(category);
@@ -79,10 +134,11 @@ cashFlowRouter.post('/', async (req, res, next) => {
       data: {
         kioskId: kiosk.id,
         type,
-        amount: parseFloat(amount),
-          description,
-          category: category || null,
-        createdAt: date ? new Date(date) : undefined,
+        amount,
+        description,
+        category: category || null,
+        paidFromCash: parsePaidFromCash(req.body.paidFromCash) ?? true,
+        createdAt: resolveExpenseDate(date),
       },
     });
     res.status(201).json(flow);
@@ -107,14 +163,26 @@ cashFlowRouter.put('/:id', async (req, res, next) => {
     const existing = await prisma.cashFlow.findFirst({ where: { id: req.params.id, kioskId: kiosk.id } });
     if (!existing) return res.status(404).json({ error: 'Gasto no encontrado' });
 
-    const { amount, concept, category, date } = req.body;
+    const { concept, category, date } = req.body;
+    let amount;
+    if (req.body.amount !== undefined) {
+      amount = parseFlowAmount(req.body.amount);
+      if (amount === null) return res.status(400).json({ error: 'Ingresá un monto mayor a cero' });
+    }
+
+    // Si el día no cambió, se respeta la hora original: antes cada edición le
+    // ponía la hora actual, así que corregir el monto de un gasto de la mañana
+    // (turno ya cerrado) lo movía al turno abierto y cambiaba los dos arqueos.
+    const sameDay = date && String(date).slice(0, 10) === toLocalDateString(existing.createdAt);
+
     const flow = await prisma.cashFlow.update({
       where: { id: existing.id },
       data: {
-        amount: amount !== undefined ? parseFloat(amount) : undefined,
+        amount,
         description: (category || concept) ? [category, concept].filter(Boolean).join(' — ') : undefined,
         category: category !== undefined ? category : undefined,
-        createdAt: date ? new Date(date) : undefined,
+        paidFromCash: parsePaidFromCash(req.body.paidFromCash),
+        createdAt: sameDay ? undefined : resolveExpenseDate(date),
       },
     });
     res.json(flow);

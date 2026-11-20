@@ -10,8 +10,7 @@ import rateLimit from 'express-rate-limit';
 import { authRouter } from './routes/auth.js';
 import { productsRouter } from './routes/products.js';
 import { salesRouter } from './routes/sales.js';
-import { cleanupOldSales } from './routes/sales.js';
-import { suppliersRouter, cleanupOldPurchases } from './routes/suppliers.js';
+import { suppliersRouter } from './routes/suppliers.js';
 import { cashFlowRouter } from './routes/cashflow.js';
 import { cashRegisterRouter } from './routes/cashRegister.js';
 import { clientsRouter } from './routes/clients.js';
@@ -20,11 +19,22 @@ import { invoicesRouter } from './routes/invoices.js';
 import { reportsRouter } from './routes/reports.js';
 import { categoriesRouter } from './routes/categories.js';
 import { employeesRouter } from './routes/employees.js';
+import { publicRouter } from './routes/public.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { notFound } from './middleware/notFound.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+// En producción (ecosystem.config.cjs) escucha solo en 127.0.0.1: Nginx es la
+// única entrada. Si 3001 quedara abierto, se podría saltear Nginx y mandar un
+// X-Forwarded-For falso para esquivar el rate limit.
+const HOST = process.env.HOST || undefined;
+
+// Detrás de Nginx, req.ip era siempre 127.0.0.1: el rate limit por IP terminaba
+// siendo UN cupo compartido por todas las sucursales (300 requests cada 5 min y
+// 20 logins cada 15 min entre todos). Con esto se toma la IP real que agrega
+// Nginx en X-Forwarded-For (un solo proxy adelante).
+app.set('trust proxy', 1);
 
 // ─── Middleware de seguridad ───────────────────────────────────────────────────
 app.use(helmet());
@@ -81,29 +91,13 @@ app.use('/api/invoices',       invoicesRouter);
 app.use('/api/reports',        reportsRouter);
 app.use('/api/categories',     categoriesRouter);
 app.use('/api/employees',      employeesRouter);
+app.use('/api/public',         publicRouter);   // sin login (landing, pantalla de bloqueo)
 
 // ─── Error handling ───────────────────────────────────────────────────────────
 app.use(notFound);
 app.use(errorHandler);
 
-app.listen(PORT, () => {
+app.listen(PORT, HOST, () => {
   console.log(`\n🏪 Kiosco API corriendo en http://localhost:${PORT}`);
   console.log(`   Ambiente: ${process.env.NODE_ENV}\n`);
 });
-
-cleanupOldSales().catch((err) => {
-  console.error('[cleanupOldSales] error:', err);
-});
-
-cleanupOldPurchases().catch((err) => {
-  console.error('[cleanupOldPurchases] error:', err);
-});
-
-setInterval(() => {
-  cleanupOldSales().catch((err) => {
-    console.error('[cleanupOldSales] error:', err);
-  });
-  cleanupOldPurchases().catch((err) => {
-    console.error('[cleanupOldPurchases] error:', err);
-  });
-}, 24 * 60 * 60 * 1000);

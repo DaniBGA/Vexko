@@ -1,7 +1,10 @@
+import { useEffect, useState } from 'react';
 import { Link, Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from '../../store/authStore.js';
-import { DollarSign, ClipboardList, Box, Tag, CreditCard, FileText, PieChart, Users, Home } from 'lucide-react';
+import { DollarSign, ClipboardList, Box, Tag, CreditCard, FileText, PieChart, Users, Home, Moon, Sun, Menu } from 'lucide-react';
 import Logo from '../ui/Logo.jsx';
+import { SubscriptionWarningModal } from '../subscription/SubscriptionNotices.jsx';
+import { useAppTheme } from '../../lib/theme.js';
 
 const PLAN_LEVELS = { BASE: 0, INTERMEDIO: 1, PREMIUM: 2 };
 
@@ -10,6 +13,12 @@ export default function AppLayout() {
   const logout = useAuthStore((s) => s.logout);
   const user = useAuthStore((s) => s.user);
   const location = useLocation();
+  const { isDark, toggleTheme } = useAppTheme();
+  // En pantallas angostas (celular, tablet vertical) la sidebar se oculta y se
+  // abre con el botón ☰. Antes simplemente desaparecía: desde el celular solo se
+  // podía llegar a "Registrar venta".
+  const [menuOpen, setMenuOpen] = useState(false);
+  useEffect(() => { setMenuOpen(false); }, [location.pathname]);
   const currentDateLabel = new Date().toLocaleDateString('es-AR', {
     day: '2-digit',
     month: 'long',
@@ -31,6 +40,13 @@ export default function AppLayout() {
   const canSeeSuppliers = planLevel >= 1;
   const canSeeClients = planLevel >= 2;
 
+  // Aviso de vencimiento: aparece cada vez que se abre la app (este layout se
+  // monta una vez por carga / login) mientras dure el período de gracia, y se
+  // cierra hasta la próxima apertura.
+  const subscription = user?.kiosk?.customer?.subscription;
+  const [warningDismissed, setWarningDismissed] = useState(false);
+  const showSubscriptionWarning = subscription?.status === 'WARNING' && !warningDismissed;
+
   function handleLogout() {
     logout();
     navigate('/login');
@@ -38,9 +54,10 @@ export default function AppLayout() {
 
   return (
     <div className="app-shell">
-      <aside className="sidebar">
+      {menuOpen && <div className="sidebar-backdrop" onClick={() => setMenuOpen(false)} />}
+      <aside className={`sidebar ${menuOpen ? 'open' : ''}`}>
         <div className="sidebar-logo">
-          <div className="logo-name"><Logo className="h-9" /></div>
+          <div className="logo-name"><Logo onDark className="h-9" /></div>
           <div className="logo-sub">Sistema de gestión</div>
         </div>
 
@@ -77,14 +94,32 @@ export default function AppLayout() {
 
         <div className="sidebar-footer">
           <button onClick={handleLogout} className="btn-outline" style={{width:'100%'}}>Cerrar sesión</button>
+          <div className="sidebar-credit">
+            Desarrollado por{' '}
+            <a href="https://www.grupovexus.com/" target="_blank" rel="noopener noreferrer">Grupo Vexus</a>
+          </div>
         </div>
       </aside>
 
       <main className="main-content">
         <header className="topbar">
-          <div style={{display:'flex',alignItems:'center',gap:8}}><Logo className="h-6" /></div>
+          <div style={{display:'flex',alignItems:'center',gap:8}}>
+            <button type="button" className="menu-toggle" onClick={() => setMenuOpen(true)} aria-label="Abrir menú">
+              <Menu size={20} />
+            </button>
+            <Logo onDark={isDark} className="h-6" />
+          </div>
           <div className="topbar-actions">
-            <div style={{fontSize:'.85rem',color:'#888'}}>{currentDateLabel}</div>
+            <div className="topbar-date" style={{fontSize:'.85rem',color:'#888'}}>{currentDateLabel}</div>
+            <button
+              type="button"
+              onClick={toggleTheme}
+              className="theme-toggle"
+              title={isDark ? 'Pasar a modo claro' : 'Pasar a modo oscuro'}
+              aria-label={isDark ? 'Pasar a modo claro' : 'Pasar a modo oscuro'}
+            >
+              {isDark ? <Sun size={18} /> : <Moon size={18} />}
+            </button>
             <button className="btn-primary" onClick={() => navigate('/venta')}>Registrar venta</button>
           </div>
         </header>
@@ -93,6 +128,10 @@ export default function AppLayout() {
           <Outlet />
         </div>
       </main>
+
+      {showSubscriptionWarning && (
+        <SubscriptionWarningModal subscription={subscription} onClose={() => setWarningDismissed(true)} />
+      )}
     </div>
   );
 }

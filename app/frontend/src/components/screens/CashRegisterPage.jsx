@@ -4,13 +4,16 @@ import toast from 'react-hot-toast';
 import {
   Wallet, ArrowDownToLine, ArrowUpFromLine, Clock3, CircleCheckBig, ChevronLeft, ChevronRight,
   Users, UserPlus, KeyRound, Eye, EyeOff, Wand2, Copy, Lock, Check, ArrowLeft, Pencil, Trash2, FileDown,
+  HandCoins, Search, X,
 } from 'lucide-react';
 import { api } from '../../lib/api.js';
 import { PageHeader, Spinner, EmptyState, fmt } from '../ui/index.jsx';
 import { downloadPdfReport } from '../../lib/pdf.js';
 import { useAuthStore } from '../../store/authStore.js';
+import { useDebouncedValue } from '../../lib/hooks.js';
 
-const NAVY = '#1c2050';
+// Variables de theme.css: cambian con el modo oscuro (un hex fijo no).
+const NAVY = 'var(--navy-text)';
 const GREEN = '#4caf82';
 
 function formatDateTime(value) {
@@ -170,7 +173,7 @@ function EmployeesPanel({ employees, isLoadingEmployees, onChanged }) {
   if (!unlocked) {
     return (
       <div className="p-5 space-y-4">
-        <div className="w-12 h-12 rounded-xl flex items-center justify-center mx-auto" style={{ background: '#eef0f7' }}>
+        <div className="w-12 h-12 rounded-xl flex items-center justify-center mx-auto" style={{ background: 'var(--soft-navy-bg)' }}>
           <Lock size={22} style={{ color: NAVY }} />
         </div>
         <p className="text-sm text-gray-500 text-center">
@@ -189,7 +192,7 @@ function EmployeesPanel({ employees, isLoadingEmployees, onChanged }) {
             type="submit"
             disabled={verifyMutation.isPending || !password.trim()}
             className="w-full rounded-xl text-white font-800 text-base py-3 disabled:opacity-60"
-            style={{ background: NAVY }}
+            style={{ background: 'var(--navy-solid)' }}
           >
             {verifyMutation.isPending ? 'Verificando...' : 'Continuar'}
           </button>
@@ -201,7 +204,7 @@ function EmployeesPanel({ employees, isLoadingEmployees, onChanged }) {
   return (
     <div className="p-5 space-y-4">
       {justSet && (
-        <div className="rounded-2xl border-2 p-4 space-y-2" style={{ borderColor: GREEN, background: '#f7fdfa' }}>
+        <div className="rounded-2xl border-2 p-4 space-y-2" style={{ borderColor: GREEN, background: 'var(--soft-green-bg)' }}>
           <div className="text-xs uppercase tracking-[0.08em] text-gray-400 font-700">Clave de {justSet.name}</div>
           <div className="flex items-center justify-between gap-3">
             <div className="text-2xl font-800 tracking-[0.3em]" style={{ color: NAVY }}>{justSet.pin}</div>
@@ -233,7 +236,7 @@ function EmployeesPanel({ employees, isLoadingEmployees, onChanged }) {
                     type="button"
                     onClick={() => { setEditingId(employee.id); setEditPin(''); setShowEditPin(false); }}
                     className="inline-flex items-center gap-1.5 text-xs font-700 rounded-full px-3 py-1.5"
-                    style={{ background: '#eef0f7', color: NAVY }}
+                    style={{ background: 'var(--soft-navy-bg)', color: NAVY }}
                   >
                     <KeyRound size={12} /> Cambiar clave
                   </button>
@@ -403,10 +406,224 @@ function EditRegisterModal({ register, employees, onClose, onSave, isSaving }) {
   );
 }
 
+/* ================= Fiado: buscador de cliente reutilizado por los dos modales ================= */
+function ClientPicker({ selected, onSelect }) {
+  const [term, setTerm] = useState('');
+  const debouncedTerm = useDebouncedValue(term.trim(), 300);
+
+  const { data: results = [] } = useQuery({
+    queryKey: ['clients-search', debouncedTerm],
+    queryFn: () => api.get('/clients', { params: { search: debouncedTerm } }).then((r) => r.data.clients),
+    enabled: debouncedTerm.length > 1 && !selected,
+  });
+
+  if (selected) {
+    return (
+      <div className="flex items-center justify-between gap-2 rounded-lg bg-brand-greenBg px-3 py-2">
+        <span className="text-sm font-700 text-green-800 truncate">{selected.name} · {selected.phone}</span>
+        <button type="button" onClick={() => onSelect(null)} className="text-green-700 hover:text-green-900" aria-label="Quitar cliente">
+          <X size={14} />
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="relative">
+      <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+      <input
+        value={term}
+        onChange={(e) => setTerm(e.target.value)}
+        placeholder="Buscar cliente por nombre o teléfono..."
+        className="field-input input-with-icon text-sm"
+        autoFocus
+      />
+      {debouncedTerm.length > 1 && (
+        <div className="mt-1 rounded-lg border border-gray-200 bg-white shadow-sm overflow-hidden max-h-40 overflow-y-auto">
+          {results.length === 0 ? (
+            <div className="px-3 py-2 text-xs text-gray-400">Sin resultados</div>
+          ) : (
+            results.map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => onSelect(c)}
+                className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 flex items-center justify-between gap-2"
+              >
+                <span className="truncate">{c.name}</span>
+                <span className="text-xs text-gray-400 flex-shrink-0">{c.phone}</span>
+              </button>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ================= Fiado: dejar una deuda nueva ================= */
+function LeaveDebtModal({ onClose }) {
+  const queryClient = useQueryClient();
+  const [client, setClient] = useState(null);
+  const [amount, setAmount] = useState('');
+  const [note, setNote] = useState('');
+
+  const { mutate: createDebt, isPending } = useMutation({
+    mutationFn: () => api.post(`/clients/${client.id}/debts`, { amount: parseFloat(amount), note: note.trim() || undefined }).then((r) => r.data),
+    onSuccess: () => {
+      toast.success('Fiado registrado');
+      queryClient.invalidateQueries({ queryKey: ['clients'] });
+      onClose();
+    },
+  });
+
+  function handleSubmit(e) {
+    e.preventDefault();
+    if (!client) return toast.error('Elegí un cliente');
+    if (!amount || parseFloat(amount) <= 0) return toast.error('Ingresá un monto válido');
+    createDebt();
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/50 px-4 py-6 flex items-center justify-center">
+      <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl overflow-hidden">
+        <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
+          <div className="text-sm font-700 text-brand-sidebar">Dejar fiado</div>
+          <button type="button" onClick={onClose} className="rounded-xl p-3 text-gray-600 hover:bg-gray-100 hover:text-gray-900 transition-colors">
+            <span className="text-3xl leading-none font-700">×</span>
+          </button>
+        </div>
+        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          <div className="field-group">
+            <label className="field-label">Cliente *</label>
+            <ClientPicker selected={client} onSelect={setClient} />
+          </div>
+          <div className="field-group">
+            <label className="field-label">Monto que se lleva debiendo *</label>
+            <input type="number" min="0" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} className="field-input" />
+          </div>
+          <div className="field-group">
+            <label className="field-label">Nota (opcional)</label>
+            <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Ej: gaseosa y pan" className="field-input" />
+          </div>
+          <div className="flex justify-end gap-3 pt-2">
+            <button type="button" onClick={onClose} className="btn-outline">Cancelar</button>
+            <button type="submit" disabled={isPending} className="btn-primary disabled:opacity-60">
+              {isPending ? 'Guardando...' : 'Registrar fiado'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+/* ================= Fiado: cobrar una deuda existente ================= */
+function CollectDebtModal({ onClose }) {
+  const queryClient = useQueryClient();
+  const [client, setClient] = useState(null);
+  const [debt, setDebt] = useState(null);
+  const [amount, setAmount] = useState('');
+
+  const { data: clientDetail, isLoading: loadingDetail } = useQuery({
+    queryKey: ['client', client?.id],
+    queryFn: () => api.get(`/clients/${client.id}`).then((r) => r.data),
+    enabled: !!client,
+  });
+  const pendingDebts = (clientDetail?.debts || []).filter((d) => d.status !== 'PAID');
+
+  const { mutate: payDebt, isPending } = useMutation({
+    mutationFn: () => api.post(`/clients/${client.id}/debts/${debt.id}/payments`, { amount: parseFloat(amount) }).then((r) => r.data),
+    onSuccess: () => {
+      toast.success('Pago registrado');
+      queryClient.invalidateQueries({ queryKey: ['clients'] });
+      queryClient.invalidateQueries({ queryKey: ['client', client.id] });
+      onClose();
+    },
+  });
+
+  function handleSubmit(e) {
+    e.preventDefault();
+    if (!debt) return toast.error('Elegí qué deuda va a pagar');
+    if (!amount || parseFloat(amount) <= 0) return toast.error('Ingresá un monto válido');
+    payDebt();
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/50 px-4 py-6 flex items-center justify-center">
+      <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl overflow-hidden">
+        <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
+          <div className="text-sm font-700 text-brand-sidebar">Cobrar deuda</div>
+          <button type="button" onClick={onClose} className="rounded-xl p-3 text-gray-600 hover:bg-gray-100 hover:text-gray-900 transition-colors">
+            <span className="text-3xl leading-none font-700">×</span>
+          </button>
+        </div>
+        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          <div className="field-group">
+            <label className="field-label">Cliente *</label>
+            <ClientPicker selected={client} onSelect={(c) => { setClient(c); setDebt(null); setAmount(''); }} />
+          </div>
+
+          {client && loadingDetail && <Spinner />}
+
+          {client && !loadingDetail && pendingDebts.length === 0 && (
+            <div className="rounded-lg bg-slate-50 border border-slate-200 p-3 text-sm text-gray-500">
+              Este cliente no tiene deudas pendientes.
+            </div>
+          )}
+
+          {client && pendingDebts.length > 0 && (
+            <div className="field-group">
+              <label className="field-label">Qué deuda va a pagar *</label>
+              <div className="space-y-2 max-h-40 overflow-y-auto">
+                {pendingDebts.map((d) => {
+                  const pending = d.amount - d.paidAmount;
+                  return (
+                    <button
+                      key={d.id}
+                      type="button"
+                      onClick={() => { setDebt(d); setAmount(pending.toFixed(2)); }}
+                      className={`w-full text-left rounded-lg border px-3 py-2 text-sm transition-colors ${debt?.id === d.id ? 'border-brand-navy bg-brand-navy/5' : 'border-gray-200 hover:bg-gray-50'}`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-700 text-brand-sidebar">Pendiente {fmt(pending)}</span>
+                        <span className="text-xs text-gray-400">de {fmt(d.amount)}</span>
+                      </div>
+                      {d.note && <div className="text-xs text-gray-400 mt-0.5">{d.note}</div>}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {debt && (
+            <div className="field-group">
+              <label className="field-label">Monto que paga ahora *</label>
+              <input type="number" min="0" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} className="field-input" />
+            </div>
+          )}
+
+          <div className="flex justify-end gap-3 pt-2">
+            <button type="button" onClick={onClose} className="btn-outline">Cancelar</button>
+            <button type="submit" disabled={isPending || !debt} className="btn-primary disabled:opacity-60">
+              {isPending ? 'Guardando...' : 'Registrar pago'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 /* ================= Página principal ================= */
 export default function CashRegisterPage() {
   const queryClient = useQueryClient();
   const kioskName = useAuthStore((s) => s.user?.kiosk?.name);
+  // El fiado depende de Clientes/puntos, que es una función exclusiva del
+  // plan premium (mismo criterio que el sidebar en AppLayout.jsx).
+  const kioskPlan = useAuthStore((s) => s.user?.kiosk?.customer?.plan);
+  const canUseFiado = String(kioskPlan || '').toUpperCase() === 'PREMIUM';
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [openingAmount, setOpeningAmount] = useState('10000');
   const [openingNotes, setOpeningNotes] = useState('');
@@ -421,6 +638,8 @@ export default function CashRegisterPage() {
   const [openPin, setOpenPin] = useState('');
   const [showOpenPin, setShowOpenPin] = useState(false);
   const [editingRegister, setEditingRegister] = useState(null);
+  const [showLeaveDebt, setShowLeaveDebt] = useState(false);
+  const [showCollectDebt, setShowCollectDebt] = useState(false);
 
   const { data: currentRegister, isLoading: loadingCurrent } = useQuery({
     queryKey: ['cash-register-current'],
@@ -640,7 +859,7 @@ export default function CashRegisterPage() {
                       <div className="text-2xl font-800 text-brand-sidebar mt-2">{fmt(displayRegister.cardSales)}</div>
                     </div>
                     <div className="rounded-2xl bg-white border border-slate-200 p-4">
-                      <div className="text-xs uppercase tracking-[0.08em] text-gray-400 font-700">Gastos del turno</div>
+                      <div className="text-xs uppercase tracking-[0.08em] text-gray-400 font-700">Gastos en efectivo</div>
                       <div className="text-2xl font-800 text-red-600 mt-2">{fmt(displayRegister.expensesTotal)}</div>
                     </div>
                   </div>
@@ -650,7 +869,7 @@ export default function CashRegisterPage() {
                       <div className="text-xs uppercase tracking-[0.08em] text-slate-300 font-700">Efectivo esperado antes del cierre</div>
                       <div className="text-2xl font-800 mt-1">{fmt(displayRegister.expectedCashBeforeClose)}</div>
                     </div>
-                    <div className="text-right text-xs text-slate-300 max-w-40">Incluye apertura + efectivo vendido - egresos del turno</div>
+                    <div className="text-right text-xs text-slate-300 max-w-40">Incluye apertura + efectivo vendido - gastos pagados con la caja</div>
                   </div>
 
                   <div className="rounded-2xl bg-brand-navy text-white p-5 flex items-center justify-between gap-4">
@@ -697,7 +916,7 @@ export default function CashRegisterPage() {
                             onClick={() => { setSelectedEmployeeId(employee.id); setOpenPin(''); setOpenStage('pin'); }}
                             className="rounded-2xl border-2 border-slate-200 hover:border-brand-green p-5 flex items-center gap-3 transition-colors"
                           >
-                            <div className="w-11 h-11 rounded-full flex items-center justify-center flex-shrink-0" style={{ background: '#eef0f7' }}>
+                            <div className="w-11 h-11 rounded-full flex items-center justify-center flex-shrink-0" style={{ background: 'var(--soft-navy-bg)' }}>
                               <Users size={20} style={{ color: NAVY }} />
                             </div>
                             <div className="font-800 text-base text-gray-900">{employee.name}</div>
@@ -754,8 +973,8 @@ export default function CashRegisterPage() {
                           >
                             <ArrowLeft size={14} /> Volver
                           </button>
-                          <div className="rounded-2xl border p-3 flex items-center gap-3" style={{ background: '#e8f8ee', borderColor: '#cdeedd' }}>
-                            <Check size={18} style={{ color: '#2e7d32' }} />
+                          <div className="rounded-2xl border p-3 flex items-center gap-3" style={{ background: 'var(--ok-bg)', borderColor: 'var(--ok-border)' }}>
+                            <Check size={18} style={{ color: 'var(--ok-text)' }} />
                             <div className="text-sm text-gray-700">Abriendo como <strong>{selectedEmployee?.name}</strong></div>
                           </div>
                         </>
@@ -890,6 +1109,22 @@ export default function CashRegisterPage() {
               <EmployeesPanel employees={employees} isLoadingEmployees={loadingEmployees} onChanged={handleEmployeesChanged} />
             </div>
 
+            {canUseFiado && (
+              <div className="card overflow-hidden">
+                <div className="card-header">
+                  <h3 className="card-title">Fiado de clientes</h3>
+                  <HandCoins size={18} className="text-brand-green" />
+                </div>
+                <div className="p-5 space-y-3">
+                  <div className="text-sm text-gray-500">Dejale mercadería a un cliente registrado, o cobrale una deuda que ya tenía.</div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button onClick={() => setShowLeaveDebt(true)} className="btn-outline text-sm py-2">Dejar fiado</button>
+                    <button onClick={() => setShowCollectDebt(true)} className="btn-primary text-sm py-2">Cobrar deuda</button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div className="card">
               <div className="card-header">
                 <h3 className="card-title">Resumen visual</h3>
@@ -917,7 +1152,7 @@ export default function CashRegisterPage() {
                 </div>
                 <div className="rounded-2xl bg-slate-50 border border-slate-200 p-4 flex items-start gap-3">
                   <ArrowDownToLine size={16} className="text-brand-sidebar mt-0.5" />
-                  <div>Al cerrarla se calcula lo esperado con ventas en efectivo menos egresos del local.</div>
+                  <div>Al cerrarla se calcula lo esperado con ventas en efectivo menos los gastos que salieron de la caja.</div>
                 </div>
               </div>
             </div>
@@ -934,6 +1169,9 @@ export default function CashRegisterPage() {
           onSave={(body) => editRegister({ id: editingRegister.id, body })}
         />
       )}
+
+      {showLeaveDebt && <LeaveDebtModal onClose={() => setShowLeaveDebt(false)} />}
+      {showCollectDebt && <CollectDebtModal onClose={() => setShowCollectDebt(false)} />}
     </div>
   );
 }

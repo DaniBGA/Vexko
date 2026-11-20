@@ -8,7 +8,7 @@ const COLS = 3;
 const ROWS = 7;
 const GUTTER = 3; // mm entre etiquetas
 
-function renderBarcodeDataUrl(value) {
+export function renderBarcodeDataUrl(value) {
   const canvas = document.createElement('canvas');
   JsBarcode(canvas, value, {
     format: 'CODE128',

@@ -13,13 +13,20 @@ import { Package } from 'lucide-react';
 
 const PAGE_SIZE = 10;
 
+// "Mi stock" (default) muestra solo lo que ya tenés cargado en este kiosco.
+// "Catálogo global" abre a los miles de productos compartidos entre todos
+// los clientes — se usa para buscar algo nuevo para agregar, no es la vista
+// habitual. Ojo: esto no tiene nada que ver con el badge "Propio"/"Global"
+// de cada fila (ver más abajo) — un producto puede estar en tu stock y
+// seguir siendo "Global" si nunca lo modificaste, "propio" es solo cuando
+// vos lo creaste y no existe en el catálogo compartido.
 const PRODUCT_FILTER = [
-  { value: '', label: 'Todos' },
-  { value: 'added', label: 'Agregados' },
+  { value: 'added', label: 'Mi stock' },
+  { value: '', label: 'Catálogo global' },
 ];
 
 function getStockStatus(product) {
-  if ((product.stock ?? 0) === 0) return 'OUT';
+  if ((product.stock ?? 0) <= 0) return 'OUT';
   if (product.stock <= product.minStock) return 'CRITICAL';
   if (product.stock <= product.minStock * 1.5) return 'ALERT';
   return 'OK';
@@ -209,7 +216,7 @@ export default function StockPage() {
   const canPrintBarcodes = kioskPlan === 'PREMIUM';
   const [showBarcodeModal, setShowBarcodeModal] = useState(false);
   const [search, setSearch] = useState('');
-  const [productFilter, setProductFilter] = useState('');
+  const [productFilter, setProductFilter] = useState('added');
   const [page, setPage] = useState(1);
 
   const searchTerm = search.trim();
@@ -274,7 +281,7 @@ export default function StockPage() {
         <select
           value={productFilter}
           onChange={(e) => setProductFilter(e.target.value)}
-          className="field-input py-2 text-sm w-40"
+          className="field-input py-2 text-sm sm:!w-40"
         >
           {PRODUCT_FILTER.map((f) => (
             <option key={f.value} value={f.value}>{f.label}</option>
@@ -295,13 +302,17 @@ export default function StockPage() {
       <div className="flex-1 overflow-y-auto p-6 space-y-5">
         <div className="card">
           <div className="card-header">
-            <h3 className="card-title">Todos los productos</h3>
-            <span className="text-xs text-gray-400">{total} productos{productFilter === 'added' ? ' agregados' : ''}</span>
+            <h3 className="card-title">{productFilter === 'added' ? 'Mi stock' : 'Catálogo global'}</h3>
+            <span className="text-xs text-gray-400">{total} producto{total === 1 ? '' : 's'}{productFilter === 'added' ? ' en tu kiosco' : ''}</span>
           </div>
           {isLoading ? (
             <Spinner />
           ) : products.length === 0 ? (
-            <EmptyState icon={Package} title="Sin productos" description="Agregá productos desde el catálogo." />
+            productFilter === 'added' ? (
+              <EmptyState icon={Package} title="Todavía no cargaste stock" description="Buscá productos del catálogo global o creá uno propio para empezar." />
+            ) : (
+              <EmptyState icon={Package} title="Sin productos" description="Probá con otra búsqueda." />
+            )
           ) : (
             <>
               <div className="overflow-x-auto">

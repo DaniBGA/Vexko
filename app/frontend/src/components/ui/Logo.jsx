@@ -1,6 +1,9 @@
 import React from 'react';
-import logo from '../../../images/logo.png';
+import logo from '../../../images/logo vexko2.png';
+import logoClaro from '../../../images/logo-vexko-claro.png';
 
-export default function Logo({ alt = 'Kiosco', className = 'h-8' }) {
-  return <img src={logo} alt={alt} className={className} />;
+// `onDark`: versión con el texto en blanco, para fondos oscuros (sidebar, logins,
+// topbar en modo oscuro). La normal tiene "Vexko" casi negro.
+export default function Logo({ alt = 'Vexko', className = 'h-8', onDark = false }) {
+  return <img src={onDark ? logoClaro : logo} alt={alt} className={className} />;
 }

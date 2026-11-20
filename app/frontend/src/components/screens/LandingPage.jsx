@@ -7,6 +7,20 @@ import {
   ChevronLeft, ChevronRight,
 } from 'lucide-react';
 import Logo from '../ui/Logo.jsx';
+import { buildWhatsappUrl, formatPlanPrice, usePublicSettings } from '../../lib/publicSettings.js';
+
+const FALLBACK_JOIN_MAIL = 'mailto:hola@kioscoapp.com?subject=Quiero%20sumarme%20a%20la%20beta%20de%20Vexko';
+
+// "Sumarme a la beta" abre un chat de WhatsApp con el número de Configuración
+// (panel admin), con el plan elegido en el mensaje. Si todavía no hay número
+// cargado, queda el mail de antes para que el botón no quede muerto.
+function buildJoinLink(whatsappNumber, planName) {
+  const text = planName
+    ? `Hola, quiero sumarme a la beta de VEXKO con el plan ${planName}.`
+    : 'Hola, quiero sumarme a la beta de VEXKO.';
+  const url = buildWhatsappUrl(whatsappNumber, text);
+  return url ? { href: url, target: '_blank', rel: 'noopener noreferrer' } : { href: FALLBACK_JOIN_MAIL };
+}
 import '../../styles/landing.css';
 
 /* ---------------- Reveal-on-scroll helper ---------------- */
@@ -726,6 +740,12 @@ const PLANS = [
 
 /* ---------------- Page ---------------- */
 export default function LandingPage() {
+  // Los precios se cargan en el panel admin → Configuración. Sin precio
+  // cargado (o si la API no responde), el plan sigue en "Próximamente".
+  const { data: settings } = usePublicSettings();
+  const planPrices = settings?.planPrices || {};
+  const hasAnyPrice = PLANS.some((plan) => planPrices[plan.key] != null);
+
   return (
     <div className="landing font-sans text-slate-800">
       {/* NAV */}
@@ -842,13 +862,17 @@ export default function LandingPage() {
           <Reveal className="max-w-xl mb-14 mx-auto text-center md:mx-0 md:text-left">
             <div className="text-sm font-700 mb-2" style={{ color: '#4caf82' }}>PLANES</div>
             <h2 className="text-3xl md:text-4xl font-800 text-slate-900">Elegí el plan según cómo crece tu kiosco</h2>
-            <p className="text-slate-500 mt-3">Los precios se están definiendo durante la beta. Por ahora, sumate y asegurate condiciones preferenciales de lanzamiento.</p>
+            <p className="text-slate-500 mt-3">
+              {hasAnyPrice
+                ? 'Suscripción mensual por kiosco, con todas sus sucursales.'
+                : 'Los precios se están definiendo durante la beta. Por ahora, sumate y asegurate condiciones preferenciales de lanzamiento.'}
+            </p>
           </Reveal>
 
           <div className="grid md:grid-cols-3 gap-6">
             {PLANS.map((plan, i) => (
               <Reveal key={plan.key} delay={i * 100}>
-                <PlanCard plan={plan} />
+                <PlanCard plan={plan} price={planPrices[plan.key]} joinLink={buildJoinLink(settings?.whatsappNumber, plan.name)} />
               </Reveal>
             ))}
           </div>
@@ -860,10 +884,10 @@ export default function LandingPage() {
         <ParallaxBackdrop />
         <div className="relative max-w-3xl mx-auto px-6 text-center">
           <Reveal>
-            <h2 className="text-3xl md:text-4xl font-800 text-white mb-4">Sumate a la beta de KioscoApp</h2>
+            <h2 className="text-3xl md:text-4xl font-800 text-white mb-4">Sumate a la beta de Vexko</h2>
             <p className="text-slate-300 mb-8">Estamos afinando la app junto a los primeros kioscos que la usan todos los días. Escribinos y te damos acceso.</p>
             <a
-              href="mailto:hola@kioscoapp.com?subject=Quiero%20sumarme%20a%20la%20beta%20de%20KioscoApp"
+              {...buildJoinLink(settings?.whatsappNumber)}
               className="inline-flex items-center gap-2 text-white font-700 rounded-xl px-7 py-3.5 transition hover:opacity-90"
               style={{ background: '#4caf82' }}
             >
@@ -898,8 +922,9 @@ export default function LandingPage() {
   );
 }
 
-function PlanCard({ plan }) {
+function PlanCard({ plan, price, joinLink }) {
   const featured = plan.featured;
+  const formattedPrice = formatPlanPrice(price);
   return (
     <div
       className={`lp-plan-card rounded-2xl p-7 h-full flex flex-col ${featured ? 'lp-plan-featured' : 'border border-slate-100'}`}
@@ -915,8 +940,18 @@ function PlanCard({ plan }) {
       <div className={`font-800 text-lg mb-1 ${featured ? 'text-white' : 'text-slate-900'}`}>{plan.name}</div>
       <div className={`text-sm mb-5 ${featured ? 'text-slate-300' : 'text-slate-500'}`}>{plan.tagline}</div>
       <div className={`text-2xl font-800 mb-6 ${featured ? 'text-white' : 'text-slate-900'}`}>
-        Próximamente
-        <div className={`text-xs font-500 mt-1 ${featured ? 'text-slate-400' : 'text-slate-400'}`}>precio en definición</div>
+        {formattedPrice ? (
+          <>
+            {formattedPrice}
+            <span className={`text-sm font-600 ml-1 ${featured ? 'text-slate-300' : 'text-slate-500'}`}>/ mes</span>
+            <div className="text-xs font-500 mt-1 text-slate-400">por kiosco</div>
+          </>
+        ) : (
+          <>
+            Próximamente
+            <div className="text-xs font-500 mt-1 text-slate-400">precio en definición</div>
+          </>
+        )}
       </div>
       <div className="flex flex-col gap-3 mb-8 flex-1">
         {plan.features.map((f) => (
@@ -933,7 +968,7 @@ function PlanCard({ plan }) {
         ))}
       </div>
       <a
-        href="mailto:hola@kioscoapp.com?subject=Quiero%20sumarme%20a%20la%20beta%20de%20KioscoApp"
+        {...joinLink}
         className={`text-center font-700 rounded-lg py-2.5 transition ${
           featured ? 'text-slate-900 hover:opacity-90' : 'border hover:bg-slate-50'
         }`}

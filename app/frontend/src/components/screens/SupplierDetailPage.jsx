@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { ArrowLeft, Plus, Search, X, Package, Clock3, CircleCheckBig, ChevronLeft, ChevronRight, History, FilePlus2, FileDown } from 'lucide-react';
+import { ArrowLeft, Plus, Search, X, Package, Clock3, CircleCheckBig, ChevronLeft, ChevronRight, History, FilePlus2, FileDown, AlertTriangle, Trash2 } from 'lucide-react';
 import { api } from '../../lib/api.js';
 import { unwrapProductsResponse } from '../../lib/response.js';
 import { PageHeader, Spinner, EmptyState, fmt } from '../ui/index.jsx';
@@ -16,6 +16,13 @@ const PAYMENT_METHODS = [
   { value: 'CARD', label: 'Tarjeta' },
 ];
 
+const LOW_STOCK_STATUSES = ['OUT', 'CRITICAL', 'ALERT'];
+const STOCK_SEVERITY = { OUT: 0, CRITICAL: 1, ALERT: 2, OK: 3 };
+
+function isLowStock(product) {
+  return LOW_STOCK_STATUSES.includes(product.stockStatus);
+}
+
 function isToday(value) {
   if (!value) return false;
   return new Date(value).toDateString() === new Date().toDateString();
@@ -26,13 +33,21 @@ function formatDateTime(value) {
   return new Date(value).toLocaleString('es-AR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
+// Mismo criterio que effectiveLoadMode() en el backend: gran parte del
+// catálogo global quedó con loadMode "pack" (default del schema) pero sin
+// datos de pack. Tratarlo como pack mostraba un contador de "packs" de 1
+// unidad y el costo salía del costPrice como si fuera precio por pack.
+function isPackProduct(product) {
+  return product?.loadMode === 'pack' && Number(product.packPrice) > 0 && Number(product.packUnits) > 0;
+}
+
 function productPackPrice(product) {
   if (product.packPrice && product.packUnits) return Number(product.packPrice);
   return null;
 }
 
 function productUnitPrice(product) {
-  if (product.loadMode === 'pack' && product.packPrice && product.packUnits) return Number(product.packPrice) / Number(product.packUnits);
+  if (isPackProduct(product)) return Number(product.packPrice) / Number(product.packUnits);
   return Number(product.costPrice || 0);
 }
 
@@ -41,7 +56,7 @@ function getPackUnits(product) {
 }
 
 function getItemTotalUnits(item) {
-  if (item.product.loadMode === 'pack') {
+  if (isPackProduct(item.product)) {
     return (item.packQuantity * getPackUnits(item.product)) + item.unitQuantity;
   }
 
@@ -84,11 +99,18 @@ export default function SupplierDetailPage() {
 
   const { data: productsData } = useQuery({
     queryKey: ['supplier-order-products', debouncedSearch],
-    // Se limita a 30 resultados: sin tope, cada letra tipeada disparaba una
-    // búsqueda que traía TODO el catálogo global (miles de productos) sin
-    // paginar, lo que hacía sentir la búsqueda muy lenta.
-    queryFn: () => api.get('/products', { params: { stockView: 1, search: debouncedSearch || undefined, limit: 30 } }).then((r) => r.data),
-    enabled: orderStage === 'build' && debouncedSearch.length >= 1,
+    // Sin búsqueda: se muestra el stock propio del kiosco (para armar el
+    // pedido en base a lo que ya vendés, no el catálogo global entero) con
+    // hasta 200 productos. Con búsqueda, se abre a todo el catálogo global +
+    // propio pero limitado a 30 resultados — sin tope, cada letra tipeada
+    // traía TODO el catálogo global (miles de productos) y hacía sentir la
+    // búsqueda muy lenta.
+    queryFn: () => api.get('/products', {
+      params: debouncedSearch
+        ? { stockView: 1, search: debouncedSearch, limit: 30 }
+        : { stockView: 1, added: 1, limit: 200 },
+    }).then((r) => r.data),
+    enabled: orderStage === 'build',
     keepPreviousData: true,
   });
 
@@ -114,6 +136,30 @@ export default function SupplierDetailPage() {
     },
   });
 
+  // Borrar el proveedor (el endpoint ya existía, pero ninguna pantalla lo usaba).
+  // Se van también sus pedidos; el stock recibido y los gastos "Compras" quedan,
+  // y sus productos pasan a "sin proveedor".
+  const { mutate: deleteSupplier, isPending: isDeletingSupplier } = useMutation({
+    mutationFn: () => api.delete(`/suppliers/${id}`),
+    onSuccess: () => {
+      toast.success('Proveedor borrado');
+      queryClient.removeQueries({ queryKey: ['supplier', id] });
+      queryClient.invalidateQueries({ queryKey: ['suppliers'] });
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['product'] });
+      navigate('/proveedores');
+    },
+  });
+
+  function handleDeleteSupplier() {
+    const orders = supplier?._count?.purchases || 0;
+    const ordersWarning = orders > 0
+      ? `\n\nSe borra${orders === 1 ? ' también su pedido' : `n también sus ${orders} pedidos`} (el historial no se puede recuperar).`
+      : '';
+    const message = `¿Borrar el proveedor "${supplier?.name || ''}"?${ordersWarning}\n\nEl stock y los gastos ya registrados no cambian, y sus productos quedan sin proveedor.`;
+    if (window.confirm(message)) deleteSupplier();
+  }
+
   const { mutate: receiveOrder, isPending: isReceiving } = useMutation({
     mutationFn: (purchaseId) => api.post(`/suppliers/${id}/orders/${purchaseId}/receive`).then((r) => r.data),
     onSuccess: () => {
@@ -121,21 +167,45 @@ export default function SupplierDetailPage() {
       setOpenReceiveModal(null);
       queryClient.invalidateQueries({ queryKey: ['supplier', id] });
       queryClient.invalidateQueries({ queryKey: ['suppliers'] });
+      // Recibir suma stock y actualiza el costo: también hay que refrescar el
+      // buscador de Venta, el detalle de producto y la lista para armar pedidos.
       queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['products-search'] });
+      queryClient.invalidateQueries({ queryKey: ['product'] });
+      queryClient.invalidateQueries({ queryKey: ['supplier-order-products'] });
     },
   });
 
+  function isFromThisSupplier(product) {
+    return Boolean(supplier?.id) && product.supplierId === supplier.id;
+  }
+
   const filteredProducts = useMemo(() => {
-    if (!debouncedSearch) return [];
     const seen = new Set();
-    return products.filter((product) => {
+    const deduped = products.filter((product) => {
       if (product.active === false) return false;
       const key = String(product.name || '').trim().toLowerCase();
       if (!key || seen.has(key)) return false;
       seen.add(key);
       return true;
     });
-  }, [products, debouncedSearch]);
+
+    // Sin búsqueda activa (navegando el stock propio): los productos de este
+    // proveedor con poco stock van primero, como recordatorio de qué pedir.
+    if (debouncedSearch) return deduped;
+    return [...deduped].sort((a, b) => {
+      const aAlert = isFromThisSupplier(a) && isLowStock(a);
+      const bAlert = isFromThisSupplier(b) && isLowStock(b);
+      if (aAlert !== bAlert) return aAlert ? -1 : 1;
+      if (aAlert && bAlert) return STOCK_SEVERITY[a.stockStatus] - STOCK_SEVERITY[b.stockStatus];
+      return 0;
+    });
+  }, [products, debouncedSearch, supplier?.id]);
+
+  const lowStockFromSupplierCount = useMemo(
+    () => (debouncedSearch ? 0 : filteredProducts.filter((p) => isFromThisSupplier(p) && isLowStock(p)).length),
+    [filteredProducts, debouncedSearch, supplier?.id]
+  );
 
   function openNewOrder() {
     setItems([]);
@@ -155,7 +225,7 @@ export default function SupplierDetailPage() {
 
     const nextItems = activeItems.map((item) => {
       const product = item.product;
-      if (product.loadMode === 'pack') {
+      if (isPackProduct(product)) {
         const packUnits = getPackUnits(product);
         return {
           product,
@@ -212,7 +282,7 @@ export default function SupplierDetailPage() {
       if (found) {
         return current.map((item) => {
           if (item.product.id !== product.id) return item;
-          if (product.loadMode === 'pack') {
+          if (isPackProduct(product)) {
             return { ...item, packQuantity: item.packQuantity + 1 };
           }
 
@@ -222,8 +292,8 @@ export default function SupplierDetailPage() {
 
       return [...current, {
         product,
-        unitQuantity: product.loadMode === 'pack' ? 0 : 1,
-        packQuantity: product.loadMode === 'pack' ? 1 : 0,
+        unitQuantity: isPackProduct(product) ? 0 : 1,
+        packQuantity: isPackProduct(product) ? 1 : 0,
       }];
     });
   }
@@ -276,6 +346,15 @@ export default function SupplierDetailPage() {
         <button onClick={() => navigate('/proveedores')} className="btn-outline inline-flex items-center gap-2">
           <ArrowLeft size={14} />
           Volver
+        </button>
+        <button
+          type="button"
+          onClick={handleDeleteSupplier}
+          disabled={!supplier || isDeletingSupplier}
+          className="inline-flex items-center gap-2 rounded-lg border border-red-200 px-3 py-2 text-sm font-700 text-red-600 hover:bg-red-50 disabled:opacity-60"
+        >
+          <Trash2 size={14} />
+          {isDeletingSupplier ? 'Borrando...' : 'Borrar proveedor'}
         </button>
         <button onClick={openNewOrder} className="btn-primary inline-flex items-center gap-2">
           <Plus size={14} />
@@ -430,14 +509,14 @@ export default function SupplierDetailPage() {
 
       {orderStage && supplier && (
         <div className="fixed inset-0 z-50 bg-black/50 px-4 py-6 flex items-center justify-center">
-          <div className="w-full max-w-6xl rounded-2xl bg-white shadow-2xl overflow-hidden max-h-[92vh] flex flex-col">
-            <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
+          <div className="w-full max-w-[100rem] rounded-2xl bg-white shadow-2xl overflow-hidden max-h-[95vh] flex flex-col">
+            <div className="flex items-center justify-between border-b border-gray-100 px-6 py-5">
               <div>
-                <div className="text-sm font-700 text-brand-sidebar">Nuevo pedido</div>
-                <div className="text-xs text-gray-400">
+                <div className="text-base font-800 text-brand-sidebar">Nuevo pedido a {supplier.name}</div>
+                <div className="text-xs text-gray-400 mt-0.5">
                   {orderStage === 'choose' && '¿Cómo querés armar este pedido?'}
                   {orderStage === 'previous' && 'Elegí el pedido que querés repetir'}
-                  {orderStage === 'build' && 'Elegí productos del catálogo global o propios del local.'}
+                  {orderStage === 'build' && 'Elegí productos de tu stock, o buscá en el catálogo global.'}
                 </div>
               </div>
               <button type="button" onClick={closeOrderModal} className="rounded-xl p-3 text-gray-600 hover:bg-gray-100 hover:text-gray-900 transition-colors">
@@ -553,49 +632,79 @@ export default function SupplierDetailPage() {
                   />
                 </div>
 
+                {!debouncedSearch && lowStockFromSupplierCount > 0 && (
+                  <div className="rounded-2xl bg-red-50 border border-red-200 p-4 flex items-start gap-3">
+                    <AlertTriangle size={18} className="text-red-500 mt-0.5 flex-shrink-0" />
+                    <div>
+                      <div className="text-sm font-800 text-red-700">
+                        {lowStockFromSupplierCount} producto{lowStockFromSupplierCount === 1 ? '' : 's'} de {supplier.name} con poco stock
+                      </div>
+                      <div className="text-xs text-red-600 mt-0.5">Los ordenamos primero en la lista para que no te olvides de pedirlos.</div>
+                    </div>
+                  </div>
+                )}
+
                 <div className="rounded-2xl bg-slate-50 border border-slate-200 p-4 text-sm text-gray-600">
-                  Cada producto del pedido muestra su ID, categoría, modo de carga, precio por pack, precio por unidad y stock actual para que puedas cargarlo como en el formulario de producto.
+                  {debouncedSearch
+                    ? 'Resultados del catálogo global y de tus productos propios.'
+                    : 'Tu stock actual — buscá arriba si necesitás algo del catálogo global que todavía no cargaste.'}
                 </div>
 
-                {debouncedSearch.length >= 1 && filteredProducts.length === 0 ? (
-                  <EmptyState icon={Search} title="Sin resultados" description="Probá con otro nombre o ID de producto." />
+                {filteredProducts.length === 0 ? (
+                  debouncedSearch ? (
+                    <EmptyState icon={Search} title="Sin resultados" description="Probá con otro nombre o ID de producto." />
+                  ) : (
+                    <EmptyState icon={Package} title="Todavía no tenés productos en stock" description="Buscá arriba en el catálogo global para empezar a armar el pedido." />
+                  )
                 ) : (
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-                    {filteredProducts.map((product) => (
-                      <button
-                        key={product.id}
-                        type="button"
-                        onClick={() => addItem(product)}
-                        className="text-left rounded-2xl border border-slate-200 bg-white p-4 hover:border-brand-green hover:shadow-sm transition-all"
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <div className="font-800 text-brand-sidebar">{product.name}</div>
-                            <div className="text-xs text-gray-400 mt-1">ID: {product.id}</div>
+                  <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-3">
+                    {filteredProducts.map((product) => {
+                      const alert = isFromThisSupplier(product) && isLowStock(product);
+                      return (
+                        <button
+                          key={product.id}
+                          type="button"
+                          onClick={() => addItem(product)}
+                          className={`text-left rounded-2xl border p-4 transition-all hover:shadow-md ${
+                            alert ? 'border-red-300 bg-red-50/60 hover:border-red-400' : 'border-slate-200 bg-white hover:border-brand-green'
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <div className="font-800 text-brand-sidebar">{product.name}</div>
+                              <div className="text-xs text-gray-400 mt-1">ID: {product.id}</div>
+                            </div>
+                            <div className="flex flex-col items-end gap-1.5">
+                              {alert && (
+                                <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2.5 py-1 text-[11px] font-700 text-red-700">
+                                  <AlertTriangle size={11} />
+                                  {product.stockStatus === 'OUT' ? 'Sin stock' : 'Poco stock'}
+                                </span>
+                              )}
+                              {product.isCustom ? <span className="rounded-full bg-green-50 px-2.5 py-1 text-[11px] font-700 text-green-700">Propio</span> : <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-700 text-slate-700">Global</span>}
+                              <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-700 text-slate-700">{product.loadMode === 'unit' ? 'Unidad' : 'Pack'}</span>
+                            </div>
                           </div>
-                          <div className="flex flex-col items-end gap-2">
-                            {product.isCustom ? <span className="rounded-full bg-green-50 px-2.5 py-1 text-[11px] font-700 text-green-700">Propio</span> : <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-700 text-slate-700">Global</span>}
-                            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-700 text-slate-700">{product.loadMode === 'unit' ? 'Unidad' : 'Pack'}</span>
+
+                          <div className="grid grid-cols-2 gap-2 mt-4 text-xs text-gray-600">
+                            <div><span className="text-gray-400 block">Categoría</span>{product.subcategory?.category?.name || 'Sin categoría'}</div>
+                            <div><span className="text-gray-400 block">Subcategoría</span>{product.subcategory?.name || '—'}</div>
+                            <div><span className="text-gray-400 block">Precio por pack</span>{product.packPrice ? fmt(product.packPrice) : '—'}</div>
+                            <div><span className="text-gray-400 block">Unidades por pack</span>{product.packUnits || '—'}</div>
+                            <div><span className="text-gray-400 block">Precio por unidad</span>{fmt(productUnitPrice(product))}</div>
+                            <div><span className="text-gray-400 block">Stock actual</span><span className={alert ? 'text-red-600 font-800' : ''}>{product.stock}</span></div>
                           </div>
-                        </div>
 
-                        <div className="grid grid-cols-2 gap-2 mt-4 text-xs text-gray-600">
-                          <div><span className="text-gray-400 block">Categoría</span>{product.subcategory?.category?.name || 'Sin categoría'}</div>
-                          <div><span className="text-gray-400 block">Subcategoría</span>{product.subcategory?.name || '—'}</div>
-                          <div><span className="text-gray-400 block">Precio por pack</span>{product.packPrice ? fmt(product.packPrice) : '—'}</div>
-                          <div><span className="text-gray-400 block">Unidades por pack</span>{product.packUnits || '—'}</div>
-                          <div><span className="text-gray-400 block">Precio por unidad</span>{fmt(productUnitPrice(product))}</div>
-                          <div><span className="text-gray-400 block">Stock actual</span>{product.stock}</div>
-                        </div>
-
-                        <div className="mt-4 text-sm font-700 text-brand-sidebar">Agregar al pedido</div>
-                      </button>
-                    ))}
+                          <div className={`mt-4 text-sm font-700 ${alert ? 'text-red-600' : 'text-brand-sidebar'}`}>Agregar al pedido</div>
+                        </button>
+                      );
+                    })}
                   </div>
                 )}
                 {productsTotal > filteredProducts.length && (
                   <div className="text-xs text-gray-400 text-center">
-                    Mostrando {filteredProducts.length} de {productsTotal} resultados — afiná la búsqueda para encontrar el producto más rápido.
+                    Mostrando {filteredProducts.length} de {productsTotal} resultados
+                    {debouncedSearch ? ' — afiná la búsqueda para encontrar el producto más rápido.' : '.'}
                   </div>
                 )}
               </div>
@@ -628,7 +737,7 @@ export default function SupplierDetailPage() {
                                 <div><span className="text-gray-400 block">Precio pack</span>{item.product.packPrice ? fmt(item.product.packPrice) : '—'}</div>
                                 <div><span className="text-gray-400 block">Precio unidad</span>{fmt(productUnitPrice(item.product))}</div>
                               </div>
-                              {item.product.loadMode === 'pack' ? (
+                              {isPackProduct(item.product) ? (
                                 <div className="mt-4 space-y-3">
                                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
                                     <div>
@@ -664,7 +773,7 @@ export default function SupplierDetailPage() {
                                   <div className="text-sm font-800 text-brand-sidebar">{fmt(productUnitPrice(item.product) * item.unitQuantity)}</div>
                                 </div>
                               )}
-                              {item.product.loadMode === 'pack' && (
+                              {isPackProduct(item.product) && (
                                 <div className="mt-3 text-sm font-800 text-brand-sidebar text-right">{fmt(productUnitPrice(item.product) * getItemTotalUnits(item))}</div>
                               )}
                             </div>

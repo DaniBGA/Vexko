@@ -41,6 +41,13 @@ fi
 
 [ -f "$BACKEND_DIR/.env" ] || fail "Falta $BACKEND_DIR/.env — copialo de .env.example y completá los valores reales antes de desplegar."
 
+# ── Node con parches de seguridad, antes de tocar nada ─────────────────────
+# Node 20 (lo que instalaba la guía) está fuera de soporte desde abr-2026 y no
+# recibió los parches del security release del 21-oct-2026 (Brotli RCE, TLS, DNS).
+log "Verificando la versión de Node ($(node -v 2>/dev/null || echo 'no instalado'))..."
+node "$BACKEND_DIR/scripts/check-node.js" \
+  || fail "Node sin parches de seguridad. Actualizalo antes de deployar: docs/GUIA_DEPLOY.md, sección 'Actualizar Node en el VPS'."
+
 # ── Backup de la base ANTES de tocar nada ───────────────────────────────────
 log "Backup de la base de datos..."
 mkdir -p "$BACKUP_DIR"
@@ -76,7 +83,9 @@ npm run build
 log "Reiniciando backend con PM2..."
 cd "$BACKEND_DIR"
 if pm2 describe kiosco-api > /dev/null 2>&1; then
-  pm2 reload ecosystem.config.cjs --env production
+  # --update-env: sin esto PM2 sigue con las variables de la primera vez que se
+  # levantó (por ejemplo, no toma HOST=127.0.0.1 agregado después).
+  pm2 reload ecosystem.config.cjs --env production --update-env
 else
   pm2 start ecosystem.config.cjs --env production
 fi

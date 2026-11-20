@@ -41,11 +41,14 @@ A partir de acá, todo lo que sigue se corre como el usuario `deploy`, no como `
 ### 1.2 Instalar Node, PostgreSQL, Nginx y PM2
 
 ```bash
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo bash -
+curl -fsSL https://deb.nodesource.com/setup_24.x | sudo bash -
 sudo apt-get install -y nodejs nginx postgresql postgresql-contrib git
 sudo npm install -g pm2
-node --version   # debería dar v20.x
+node --version   # debería dar v24.22.1 o posterior
 ```
+
+Usar **Node 24 LTS**. Hasta oct-2026 esta guía instalaba Node 20, que está fuera de soporte desde
+abril de 2026 y no recibe parches de seguridad (ver "Actualizar Node en el VPS", más abajo).
 
 ### 1.3 Crear la base de datos
 
@@ -95,19 +98,34 @@ cp app/frontend/.env.example app/frontend/.env
 
 El frontend por defecto pega a `/api` (ruta relativa), que es justo lo que necesita al quedar detrás de Nginx en el mismo dominio — normalmente no hace falta tocar nada acá.
 
-### 1.6 Primer deploy manual (build + migraciones + seed)
+### 1.6 Primer deploy manual (build + migraciones + catálogo + admin)
 
 ```bash
 cd /var/www/kiosco-app/app/backend
 npm ci --omit=dev
 npx prisma migrate deploy
 npx prisma generate
-npx prisma db seed        # SOLO la primera vez, carga datos de ejemplo — salteá esto si no lo querés
+npm run db:seed:catalog   # catálogo global (~4200 productos); se puede repetir, no duplica
+
+# Cuenta del panel /admin, con un email y una clave propios (mínimo 12 caracteres).
+# El espacio adelante evita que la clave quede en el historial de bash.
+ ADMIN_EMAIL=vos@grupovexus.com ADMIN_PASSWORD='una-clave-larga-y-unica' npm run admin:create
 
 cd /var/www/kiosco-app/app/frontend
 npm ci
 npm run build
 ```
+
+**No corras `npx prisma db seed` en producción.** Crea `admin@kiosco.com` / `kiosco123` y
+sucursales demo con contraseñas que están publicadas en el README: con esa cuenta cualquiera
+entra al panel admin. Desde el 25-oct-2026 el seed se niega a correr con `NODE_ENV=production`.
+Si ya se corrió en un servidor, desactivá esas cuentas:
+
+```bash
+psql "$DATABASE_URL" -c "UPDATE \"User\" SET active = false WHERE email IN ('admin@kiosco.com','base@kiosco.com','intermedio@kiosco.com','premium@kiosco.com')"
+```
+
+`npm run admin:create` también sirve para cambiarle la contraseña al admin (con el mismo email).
 
 ### 1.7 Levantar el backend con PM2 por primera vez
 
@@ -214,6 +232,108 @@ De acá en adelante: **cada push a `main` deploya solo.** Si alguna vez necesit�
 ### Deploys normales
 No hacés nada especial — `git push origin main` y el resto es automático.
 
+Excepción: si el deploy trae **migraciones nuevas**, mirá antes el `migration.sql` de cada
+una. `prisma migrate deploy` las aplica tal cual, y algunas se escribieron asumiendo una
+base de desarrollo con datos de prueba.
+
+### Antes de deployar: migraciones de clientes/fiado/puntos (sep-2026)
+
+Las migraciones `20260917011553`, `20260917015926` y `20260917030221` (fiado, regla de
+puntos en %, cupones con código) tienen dos supuestos que en producción hay que revisar:
+
+```bash
+psql "$DATABASE_URL" -c 'SELECT COUNT(*) FROM "PointRedemption";'
+psql "$DATABASE_URL" -c 'SELECT id, "kioskId", "discountAmount" FROM "LoyaltyRule" WHERE active;'
+```
+
+1. **`PointRedemption` tiene que estar vacía.** La migración agrega `code TEXT NOT NULL` sin
+   valor por defecto; si hay filas, falla y el deploy se corta. Si hay canjes viejos, antes de
+   deployar decidí si se borran o editá la migración para que les genere un código.
+2. **`LoyaltyRule.discountAmount` se renombra a `discountPercent` y conserva el valor.** Una
+   regla vieja de "$500 de descuento" pasaría a ser "500 % de descuento". Después del deploy,
+   corregí esas reglas a un porcentaje real (desde `/clientes` → Sistema de puntos, o por SQL).
+   Desde el 24-oct-2026 la API acota el descuento a 100 %, así que ya no da totales negativos,
+   pero esa regla seguiría regalando la compra entera hasta que la corrijas.
+
+La migración siguiente, `20261024120000_sale_item_cost_and_supplier_unique_per_kiosk`, es
+segura de aplicar con datos:
+
+- Cambia `Supplier.name` de único global a único por sucursal. No puede fallar, porque con la
+  restricción vieja no existen duplicados dentro de una sucursal.
+- Agrega `SaleItem.unitCost` y lo completa en las ventas existentes con el costo **actual** de
+  cada producto. Es una aproximación: si un costo cambió desde la venta, el costo de lo vendido
+  de meses pasados en "Resultados del mes" usa el costo de hoy. Las ventas nuevas guardan el
+  costo exacto del momento.
+
+### Al deployar los cambios del 25-oct-2026 (red y dependencias)
+
+- El backend ahora escucha solo en `127.0.0.1:3001` (`HOST` en `ecosystem.config.cjs`): Nginx
+  es la única entrada. `deploy.sh` usa `pm2 reload ... --update-env` para que tome la variable.
+  Si el health check falla después del deploy, corré `pm2 delete kiosco-api` y
+  `pm2 start ecosystem.config.cjs --env production`.
+- `app.set('trust proxy', 1)`: el rate limit pasa a ser por IP real. Antes, detrás de Nginx,
+  todas las sucursales compartían un único cupo (300 requests cada 5 min y 20 logins cada
+  15 min en total).
+- `prisma` pasó a `dependencies`: `npm ci --omit=dev` lo instala y `npx prisma migrate deploy`
+  usa la versión del lockfile (antes `npx` bajaba la última de npm en cada deploy).
+- La migración `20261025200000_cashflow_paid_from_cash` agrega "¿Salió de la caja?" a los gastos,
+  con `true` por defecto: es segura con datos y los gastos viejos se comportan como antes.
+- **Ya no se borran datos viejos.** Antes el backend borraba cada 24 h las ventas, los pedidos y
+  los gastos "Compras" de más de 2 meses. Ahora se conserva todo y la base crece con el uso
+  (≈ 2 KB por venta): revisá el disco cada tanto con `df -h` y
+  `psql "$DATABASE_URL" -c "SELECT pg_size_pretty(pg_database_size(current_database()))"`.
+
+### Después de deployar: suscripciones (oct-2026)
+
+La migración `20261025120000_customer_subscriptions` activa el cobro mensual a VEXKO (ver
+[SUSCRIPCIONES.md](SUSCRIPCIONES.md)). Para que nadie quede bloqueado al deployar, a todos los
+clientes existentes les arranca el ciclo **en el momento del deploy**. Por eso, sin más acción,
+**todos vencen al mismo tiempo, un mes después del deploy**, y 10 días más tarde se bloquean.
+
+Apenas termine el deploy, en `/admin` → "Ver mis kioscos" → "Suscripción" de cada cliente:
+
+1. Registrá su **último pago real** con la fecha en que lo hizo. El vencimiento queda a un mes de esa fecha.
+2. A las cuentas de prueba o internas, marcalas como **exentas**.
+3. En la pestaña **"Configuración"** cargá el **WhatsApp de contacto** (si no, la pantalla de
+   bloqueo no muestra el botón de WhatsApp) y los **precios de los planes** (si no, la landing
+   sigue mostrando "Próximamente"). La migración `20261025180000_app_settings` crea la tabla vacía.
+
+Ojo: si registrás un último pago de hace más de 1 mes y 10 días, ese cliente queda
+**inhabilitado en el acto**. Es el comportamiento esperado si de verdad no pagó, pero
+conviene avisarle antes.
+
+### Actualizar Node en el VPS (security releases)
+
+`deploy.sh` corre `app/backend/scripts/check-node.js` antes de tocar nada. Si el Node del servidor
+no tiene los últimos parches de seguridad, el deploy se corta con un error que te manda acá.
+
+El último aviso es el **security release del 21-oct-2026**: 10 vulnerabilidades, 4 High, entre
+ellas un out-of-bounds write en el decoder Brotli con posible ejecución remota (CVE-2026-111497) y
+bypasses de validación de hostname en TLS. Las versiones corregidas son **24.22.1** (la que usa
+producción), 22.23.4 y 26.12.1. **Node 20 y anteriores no reciben el arreglo.**
+Aviso oficial: <https://nodejs.org/en/blog/vulnerability/october-2026-security-releases>.
+
+```bash
+ssh deploy@<IP_DEL_VPS>
+node -v                                   # si da v20.x, o v24 anterior a 24.22.1, actualizar
+
+curl -fsSL https://deb.nodesource.com/setup_24.x | sudo bash -   # cambia el repo a Node 24 (si venía de 20)
+sudo apt-get update && sudo apt-get install -y nodejs
+node -v                                   # v24.22.1 o posterior
+
+sudo npm install -g pm2@latest           # PM2 instalado con el Node viejo
+pm2 update                                # reinicia el daemon de PM2 con el Node nuevo (sin perder procesos)
+
+cd /var/www/kiosco-app && ./deploy.sh     # reinstala dependencias y reinicia con el Node nuevo
+pm2 describe kiosco-api | grep "node.js version"   # confirmar que la app corre en v24
+```
+
+Después de un upgrade de versión mayor (20 → 24), `deploy.sh` reinstala `node_modules` con `npm ci`.
+El motor de Prisma y bcryptjs no dependen de la versión de Node, así que no hace falta nada más.
+
+Con cada nuevo security release de Node: actualizar la tabla `PATCHED_MINIMUM` de
+`app/backend/scripts/check-node.js` y el campo `engines` de los dos `package.json`.
+
 ### Deploy manual (sin pasar por GitHub Actions)
 Si estás conectado por SSH y querés forzar un deploy ahí mismo:
 
@@ -232,13 +352,23 @@ pm2 monit                   # CPU/memoria en vivo
 ```
 
 ### Backups
-`deploy.sh` hace un backup de la base **antes de cada deploy** (antes de migrar), en `/var/backups/kiosco-app/`, y se queda solo con los últimos 14. Si querés backups regulares aunque no deployes seguido, agregá un cron aparte:
+`deploy.sh` hace un backup de la base **antes de cada deploy** (antes de migrar), en `/var/backups/kiosco-app/`, y se queda solo con los últimos 14 de esa carpeta.
+
+Con clientes reales, **el backup diario es obligatorio**: sin él, entre deploy y deploy no hay
+copia de las ventas. Va en una subcarpeta propia, porque la limpieza de `deploy.sh` cuenta
+todos los `.sql.gz` de `/var/backups/kiosco-app/` y los diarios desplazarían a los de antes de
+cada deploy (los que sirven para el rollback):
 
 ```bash
+mkdir -p /var/backups/kiosco-app/diarios
 crontab -e
-# todos los días a las 3am
-0 3 * * * pg_dump "$(grep DATABASE_URL /var/www/kiosco-app/app/backend/.env | cut -d= -f2- | tr -d '\"')" | gzip > /var/backups/kiosco-app/diario_$(date +\%Y\%m\%d).sql.gz
+# todos los días a las 3am, y se borran los de más de 30 días
+0 3 * * * pg_dump "$(grep DATABASE_URL /var/www/kiosco-app/app/backend/.env | cut -d= -f2- | tr -d '\"')" | gzip > /var/backups/kiosco-app/diarios/kiosco_$(date +\%Y\%m\%d).sql.gz && find /var/backups/kiosco-app/diarios -name '*.sql.gz' -mtime +30 -delete
 ```
+
+Estos backups quedan **en el mismo VPS**: si se pierde el servidor, se pierden con él. Activá
+también los backups automáticos del VPS en el panel de Hostinger, o copiá la carpeta a otro
+lado (por ejemplo, con `rclone` a un Drive) al menos una vez por semana.
 
 ### Rollback (si un deploy rompió algo)
 

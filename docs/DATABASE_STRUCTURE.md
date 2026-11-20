@@ -1,364 +1,380 @@
-# 📊 Estructura de la Base de Datos - Indexación Detallada
+# Estructura de la base de datos
 
-## 🗂️ Modelos y Relaciones
+**Motor:** PostgreSQL (vía Prisma 5). Fuente de verdad: [`app/backend/prisma/schema.prisma`](../app/backend/prisma/schema.prisma).
+**Última revisión:** 25 de octubre de 2026 — refleja el schema con las migraciones
+hasta `20261025200000_cashflow_paid_from_cash` (24 modelos).
 
-### 1. **CUSTOMER** (Clientes / Inquilinos)
-- **Tabla**: `customer`
-- **Propósito**: Raíz de la arquitectura multi-tenant. Cada cliente puede tener múltiples kioscos.
-- **Campos**:
-  | Campo | Tipo | Propiedades | Descripción |
-  |-------|------|-------------|-------------|
-  | `id` | String | PK, @default(cuid()) | ID único del cliente |
-  | `name` | String | UNIQUE | Nombre único del cliente |
-  | `email` | String | UNIQUE, nullable | Email del cliente |
-  | `phone` | String | nullable | Teléfono |
-  | `address` | String | nullable | Dirección |
-  | `createdAt` | DateTime | @default(now()) | Fecha de creación |
-  | `updatedAt` | DateTime | @updatedAt | Última actualización |
+> Si cambiás el schema, actualizá este documento en el mismo cambio y anotalo en
+> el registro de [`CLAUDE.md`](../CLAUDE.md).
 
-- **Índices**:
-  - ✅ `@@index([email])` - Búsqueda rápida por email
-
-- **Relaciones**:
-  - → `Kiosk[]` - Un cliente tiene múltiples kioscos
-  - → `Product[]` - Productos personalizados del cliente
+Todos los `id` son `String @default(cuid())`. Los montos son `Float` (no `Decimal`).
+Los campos "enum" son `String` con valores convencionales (el schema no usa
+`enum` de Prisma) — los valores válidos se listan en cada tabla.
 
 ---
 
-### 2. **KIOSK** (Sucursales / Puntos de Venta)
-- **Tabla**: `kiosk`
-- **Propósito**: Punto de venta individual. Cada cliente puede tener múltiples kioscos con inventario independiente.
-- **Campos**:
-  | Campo | Tipo | Propiedades | Descripción |
-  |-------|------|-------------|-------------|
-  | `id` | String | PK, @default(cuid()) | ID único del kiosko |
-  | `name` | String | - | Nombre del kiosko (ej: "Sucursal Centro") |
-  | `address` | String | nullable | Dirección |
-  | `phone` | String | nullable | Teléfono |
-  | `customerId` | String | FK → Customer | Relación con cliente |
-  | `createdAt` | DateTime | @default(now()) | Fecha de creación |
-  | `updatedAt` | DateTime | @updatedAt | Última actualización |
-
-- **Índices**:
-  - ✅ `@@unique([customerId, name])` - Un kiosko por nombre por cliente
-  - ✅ `@@index([customerId])` - Búsqueda rápida de kioscos por cliente
-
-- **Relaciones**:
-  - ← Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  - → `KioskProduct[]` - Inventario del kiosko
-  - → `Sale[]` - Ventas del kiosko
-  - → `Supplier[]` - Proveedores del kiosko
-  - → `CashFlow[]` - Movimientos de caja
-
----
-
-### 3. **CATEGORY** (Categorías de Productos - Global)
-- **Tabla**: `category`
-- **Propósito**: Categorías globales compartidas por todos los productos.
-- **Campos**:
-  | Campo | Tipo | Propiedades | Descripción |
-  |-------|------|-------------|-------------|
-  | `id` | String | PK, @default(cuid()) | ID único |
-  | `name` | String | UNIQUE | Nombre único de categoría |
-  | `description` | String | nullable | Descripción |
-  | `createdAt` | DateTime | @default(now()) | - |
-  | `updatedAt` | DateTime | @updatedAt | - |
-
-- **Índices**:
-  - ✅ `@@index([name])` - Búsqueda rápida por nombre
-
-- **Relaciones**:
-  - → `Product[]` - Productos en esta categoría
-
----
-
-### 4. **PRODUCT** (Catálogo Global + Productos Personalizados)
-- **Tabla**: `product`
-- **Propósito**: Catálogo global de productos + productos personalizados por cliente
-- **Campos**:
-  | Campo | Tipo | Propiedades | Descripción |
-  |-------|------|-------------|-------------|
-  | `id` | String | PK, @default(cuid()) | ID único |
-  | `name` | String | - | Nombre del producto |
-  | `description` | String | nullable | Descripción |
-  | `barcode` | String | UNIQUE, nullable | Código de barras |
-  | `sku` | String | UNIQUE, nullable | SKU del producto |
-  | `basePrice` | Float | - | Precio base (puede variar por kiosko) |
-  | `baseCost` | Float | - | Costo base |
-  | `categoryId` | String | FK → Category | Relación con categoría |
-  | `isCustom` | Boolean | @default(false) | ¿Es un producto personalizado? |
-  | `customerId` | String | FK → Customer, nullable | Si es personalizado, de qué cliente |
-  | `createdAt` | DateTime | @default(now()) | - |
-  | `updatedAt` | DateTime | @updatedAt | - |
-
-- **Índices**:
-  - ✅ `@@index([categoryId])` - Búsqueda rápida por categoría
-  - ✅ `@@index([customerId])` - Búsqueda rápida de productos del cliente
-  - ✅ `@@index([isCustom])` - Filtrar globales vs personalizados
-  - ✅ `@@unique(barcode)` - Un código de barras único
-  - ✅ `@@unique(sku)` - Un SKU único
-
-- **Relaciones**:
-  - ← Category @relation(fields: [categoryId], references: [id])
-  - ← Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  - → `KioskProduct[]` - Inventario en kioscos
-  - → `SaleItem[]` - Items vendidos
-  - → `SupplierProduct[]` - Relaciones con proveedores
-
----
-
-### 5. **KIOSK_PRODUCT** (JOIN TABLE - Inventario por Kiosko)
-- **Tabla**: `kiosk_product`
-- **Propósito**: Mapea productos a kioscos con inventario y precio específico por kiosko
-- **Campos**:
-  | Campo | Tipo | Propiedades | Descripción |
-  |-------|------|-------------|-------------|
-  | `id` | String | PK, @default(cuid()) | ID único |
-  | `kioskId` | String | FK → Kiosk | Relación con kiosko |
-  | `productId` | String | FK → Product | Relación con producto |
-  | `stock` | Int | @default(0) | Stock actual en este kiosko |
-  | `minStock` | Int | @default(0) | Stock mínimo para alertas |
-  | `price` | Float | - | Precio en este kiosko (puede diferir) |
-  | `createdAt` | DateTime | @default(now()) | - |
-  | `updatedAt` | DateTime | @updatedAt | - |
-
-- **Índices**:
-  - ✅ `@@unique([kioskId, productId])` - Un producto por kiosko (CRÍTICO)
-  - ✅ `@@index([kioskId])` - Búsqueda rápida de productos por kiosko
-  - ✅ `@@index([productId])` - Búsqueda rápida de kioscos para un producto
-
-- **Relaciones**:
-  - ← Kiosk @relation(fields: [kioskId], references: [id], onDelete: Cascade)
-  - ← Product @relation(fields: [productId], references: [id], onDelete: Cascade)
-
-- **Notas**: 
-  - **CRÍTICA**: Este es el corazón de la arquitectura multi-tenant
-  - Permite que el mismo producto tenga diferente stock y precio en cada kiosko
-  - Elimina duplicación de productos
-
----
-
-### 6. **SALE** (Ventas)
-- **Tabla**: `sale`
-- **Propósito**: Registro de ventas por kiosko con fecha
-- **Campos**:
-  | Campo | Tipo | Propiedades | Descripción |
-  |-------|------|-------------|-------------|
-  | `id` | String | PK, @default(cuid()) | ID único |
-  | `date` | DateTime | @default(now()) | Fecha/hora de venta |
-  | `total` | Float | - | Total de la venta |
-  | `paymentMethod` | String | - | 'CASH', 'CARD', 'BOTH' |
-  | `kioskId` | String | FK → Kiosk | Relación con kiosko |
-  | `createdAt` | DateTime | @default(now()) | - |
-  | `updatedAt` | DateTime | @updatedAt | - |
-
-- **Índices**:
-  - ✅ `@@index([kioskId])` - Ventas por kiosko
-  - ✅ `@@index([date])` - Búsqueda por rango de fechas
-
-- **Relaciones**:
-  - ← Kiosk @relation(fields: [kioskId], references: [id])
-  - → `SaleItem[]` - Items de esta venta
-
----
-
-### 7. **SALE_ITEM** (Líneas de Venta)
-- **Tabla**: `sale_item`
-- **Propósito**: Detalle de cada producto vendido en una venta
-- **Campos**:
-  | Campo | Tipo | Propiedades | Descripción |
-  |-------|------|-------------|-------------|
-  | `id` | String | PK, @default(cuid()) | ID único |
-  | `quantity` | Int | - | Cantidad vendida |
-  | `unitPrice` | Float | - | Precio unitario en el momento |
-  | `subtotal` | Float | - | quantity × unitPrice |
-  | `saleId` | String | FK → Sale | Relación con venta |
-  | `productId` | String | FK → Product | Relación con producto |
-  | `createdAt` | DateTime | @default(now()) | - |
-
-- **Índices**:
-  - ✅ `@@index([saleId])` - Items por venta
-  - ✅ `@@index([productId])` - Búsqueda rápida de qué productos se vendieron
-
-- **Relaciones**:
-  - ← Sale @relation(fields: [saleId], references: [id], onDelete: Cascade)
-  - ← Product @relation(fields: [productId], references: [id])
-
----
-
-### 8. **SUPPLIER** (Proveedores por Kiosko)
-- **Tabla**: `supplier`
-- **Propósito**: Proveedores específicos de cada kiosko
-- **Campos**:
-  | Campo | Tipo | Propiedades | Descripción |
-  |-------|------|-------------|-------------|
-  | `id` | String | PK, @default(cuid()) | ID único |
-  | `name` | String | - | Nombre del proveedor |
-  | `phone` | String | nullable | Teléfono |
-  | `email` | String | nullable | Email |
-  | `address` | String | nullable | Dirección |
-  | `kioskId` | String | FK → Kiosk | Relación con kiosko |
-  | `createdAt` | DateTime | @default(now()) | - |
-  | `updatedAt` | DateTime | @updatedAt | - |
-
-- **Índices**:
-  - ✅ `@@index([kioskId])` - Proveedores por kiosko
-
-- **Relaciones**:
-  - ← Kiosk @relation(fields: [kioskId], references: [id])
-  - → `SupplierProduct[]` - Productos de este proveedor
-
----
-
-### 9. **SUPPLIER_PRODUCT** (Relación Proveedor-Producto)
-- **Tabla**: `supplier_product`
-- **Propósito**: Mapea qué proveedores suministran qué productos
-- **Campos**:
-  | Campo | Tipo | Propiedades | Descripción |
-  |-------|------|-------------|-------------|
-  | `id` | String | PK, @default(cuid()) | ID único |
-  | `cost` | Float | - | Costo de compra al proveedor |
-  | `leadDays` | Int | nullable | Días de entrega |
-  | `supplierId` | String | FK → Supplier | Relación con proveedor |
-  | `productId` | String | FK → Product | Relación con producto |
-  | `createdAt` | DateTime | @default(now()) | - |
-  | `updatedAt` | DateTime | @updatedAt | - |
-
-- **Índices**:
-  - ✅ `@@unique([supplierId, productId])` - Un proveedor por producto
-  - ✅ `@@index([supplierId])` - Búsqueda rápida de proveedores
-  - ✅ `@@index([productId])` - Búsqueda rápida de quién lo provee
-
-- **Relaciones**:
-  - ← Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
-  - ← Product @relation(fields: [productId], references: [id], onDelete: Cascade)
-
----
-
-### 10. **CASH_FLOW** (Movimientos de Caja)
-- **Tabla**: `cash_flow`
-- **Propósito**: Registro de ingresos y egresos por kiosko
-- **Campos**:
-  | Campo | Tipo | Propiedades | Descripción |
-  |-------|------|-------------|-------------|
-  | `id` | String | PK, @default(cuid()) | ID único |
-  | `type` | String | - | 'INCOME' o 'EXPENSE' |
-  | `amount` | Float | - | Monto del movimiento |
-  | `description` | String | nullable | Descripción (ej: "Venta 2 Coca") |
-  | `kioskId` | String | FK → Kiosk | Relación con kiosko |
-  | `createdAt` | DateTime | @default(now()) | Fecha del movimiento |
-  | `updatedAt` | DateTime | @updatedAt | - |
-
-- **Índices**:
-  - ✅ `@@index([kioskId])` - Movimientos por kiosko
-  - ✅ `@@index([type])` - Filtrar ingresos vs egresos
-  - ✅ `@@index([createdAt])` - Búsqueda por rango de fechas
-
-- **Relaciones**:
-  - ← Kiosk @relation(fields: [kioskId], references: [id])
-
----
-
-## 📈 Resumen de Índices
-
-| Tabla | Campo(s) | Tipo | Razón |
-|-------|----------|------|-------|
-| **customer** | email | INDEX | Búsqueda por email |
-| **kiosk** | customerId | INDEX | Listar kioscos de un cliente |
-| **kiosk** | customerId, name | UNIQUE | Garantizar nombres únicos por cliente |
-| **category** | name | INDEX | Búsqueda por nombre |
-| **product** | categoryId | INDEX | Productos por categoría |
-| **product** | customerId | INDEX | Productos personalizados |
-| **product** | isCustom | INDEX | Filtrar globales vs personalizados |
-| **product** | barcode | UNIQUE | Código de barras único |
-| **product** | sku | UNIQUE | SKU único |
-| **kiosk_product** | kioskId, productId | UNIQUE | ⚡ CRÍTICO - Un producto por kiosko |
-| **kiosk_product** | kioskId | INDEX | Productos de un kiosko |
-| **kiosk_product** | productId | INDEX | Kioscos con un producto |
-| **sale** | kioskId | INDEX | Ventas por kiosko |
-| **sale** | date | INDEX | Búsqueda por fecha |
-| **sale_item** | saleId | INDEX | Items de una venta |
-| **sale_item** | productId | INDEX | Qué se vendió |
-| **supplier** | kioskId | INDEX | Proveedores del kiosko |
-| **supplier_product** | supplierId, productId | UNIQUE | Un proveedor por producto |
-| **supplier_product** | supplierId | INDEX | Productos de un proveedor |
-| **supplier_product** | productId | INDEX | Proveedores del producto |
-| **cash_flow** | kioskId | INDEX | Movimientos del kiosko |
-| **cash_flow** | type | INDEX | Ingresos vs Egresos |
-| **cash_flow** | createdAt | INDEX | Búsqueda por fecha |
-
----
-
-## 🎯 Flujo de Datos Clave
-
-### Venta Típica:
-```
-Customer (Kiosko Don Roberto)
-    ↓
-Kiosk (Sucursal Centro)
-    ↓
-KioskProduct (Coca Cola en Sucursal Centro - stock: 45, price: $6.60)
-    ↓
-Sale (Venta realizada)
-    ↓
-SaleItem (2x Coca Cola a $6.60 = $13.20)
-    ↓
-CashFlow (INCOME +$13.20 - Venta 2 Coca)
-```
-
-### Búsqueda de Productos:
-```
-Customer: "Kiosko Don Roberto"
-    ↓ customerId
-Kiosk: "Sucursal Centro"
-    ↓ kioskId
-KioskProduct[]: [Coca Cola, Fanta, Papas, ...]
-    ↓ productId
-Product[]: Datos globales (nombre, barcode, basePrice)
-    ↓ categoryId
-Category: "Bebidas"
-```
-
----
-
-## 🔒 Integridad Referencial
-
-- ✅ **ON DELETE CASCADE**: Al eliminar un cliente, se eliminan todos sus kioscos, productos, ventas, etc.
-- ✅ **ON DELETE CASCADE**: Al eliminar un kiosko, se eliminan sus productos, ventas, proveedores, etc.
-- ✅ **ON DELETE CASCADE**: Al eliminar una venta, se eliminan sus items
-- ✅ **UNIQUE CONSTRAINTS**: Garantizan datos únicos donde es necesario
-
----
-
-## 📊 Cardinalidad de Relaciones
+## Mapa general
 
 ```
-Customer (1) ──── (Many) Kiosk
-Customer (1) ──── (Many) Product (personalizados)
-
-Kiosk (1) ──── (Many) KioskProduct
-Kiosk (1) ──── (Many) Sale
-Kiosk (1) ──── (Many) Supplier
-Kiosk (1) ──── (Many) CashFlow
-
-Category (1) ──── (Many) Product
-
-Product (1) ──── (Many) KioskProduct
-Product (1) ──── (Many) SaleItem
-Product (1) ──── (Many) SupplierProduct
-
-Sale (1) ──── (Many) SaleItem
-Supplier (1) ──── (Many) SupplierProduct
+Customer (cliente de Vexus / negocio, tiene el PLAN)
+ ├── Category (propias del cliente)            ── Category global (customerId null)
+ ├── Product (isCustom, propios del cliente)   ── Product global (customerId null)
+ └── Kiosk (sucursal)
+      ├── User  (1:1, rol KIOSK — la cuenta con la que se loguea la sucursal)
+      │    ├── Sale
+      │    └── CashRegister ── Employee (quién abrió el turno)
+      ├── Employee (PIN para abrir caja)
+      ├── KioskProduct (stock / precio / costo de un Product en esta sucursal)
+      ├── Sale ── SaleItem ── Product
+      │    └── PointRedemption (cupón de descuento usado, opcional)
+      ├── CashFlow (gastos / ingresos manuales)
+      ├── Supplier ── SupplierProduct ── Product
+      │    └── Purchase ── PurchaseItem ── Product
+      ├── Client (cliente final del kiosco: puntos + fiado)
+      │    ├── PointRedemption (cupones generados al canjear puntos)
+      │    └── ClientDebt ── ClientDebtPayment
+      ├── LoyaltyRule (regla de puntos de la sucursal)
+      └── Invoice (facturación AFIP)
 ```
+
+Agrupación por dominio:
+
+| Dominio | Modelos |
+|---|---|
+| Multi-tenant | `Customer`, `Kiosk`, `User`, `Employee` |
+| Suscripción a VEXKO | `SubscriptionPayment` (+ campos de suscripción en `Customer`), `AppSettings` |
+| Catálogo e inventario | `Category`, `Subcategory`, `Product`, `KioskProduct` |
+| Ventas | `Sale`, `SaleItem`, `Invoice` |
+| Caja | `CashRegister`, `CashFlow` |
+| Proveedores y compras | `Supplier`, `SupplierProduct`, `Purchase`, `PurchaseItem` |
+| Clientes finales | `Client`, `ClientDebt`, `ClientDebtPayment`, `LoyaltyRule`, `PointRedemption` |
 
 ---
 
-## 💡 Ventajas de esta Estructura
+## 1. Multi-tenant
 
-1. ✅ **Multi-tenant** - Cada cliente aislado
-2. ✅ **Sin duplicación** - Un producto existe una sola vez
-3. ✅ **Flexibilidad de precios** - Cada kiosko tiene su precio
-4. ✅ **Inventario independiente** - Stock diferente por kiosko
-5. ✅ **Productos personalizados** - Los clientes pueden crear sus propios
-6. ✅ **Auditoría completa** - Toda venta registrada
-7. ✅ **Proveedores por kiosko** - Cada sucursal con sus proveedores
+### Customer
+Raíz del tenant: el negocio que contrata Vexko. Tiene el **plan**, que define qué
+pantallas ve cada una de sus sucursales.
+
+| Campo | Tipo | Notas |
+|---|---|---|
+| `name` | String | `@unique` |
+| `plan` | String | `BASE` (default) \| `INTERMEDIO` \| `PREMIUM` |
+| `email` | String? | `@unique` |
+| `phone`, `address` | String? | |
+| `subscriptionStartedAt` | DateTime | **nuevo (oct-2026)**, default `now()`. Base del ciclo de suscripción mientras no haya pagos |
+| `lastPaymentAt` | DateTime? | **nuevo** — `paidAt` del pago más reciente (denormalizado para no consultar los pagos en cada request) |
+| `subscriptionExempt` | Boolean | **nuevo**, default `false` — no se cobra: nunca se avisa ni se bloquea |
+
+Relaciones: `kiosks[]`, `products[]` (propios), `categories[]` (propias), `subscriptionPayments[]`.
+
+### SubscriptionPayment
+Pago de la cuota mensual a VEXKO, registrado a mano desde el panel admin. Reglas en
+[SUSCRIPCIONES.md](SUSCRIPCIONES.md).
+
+| Campo | Tipo | Notas |
+|---|---|---|
+| `customerId` | FK → Customer | Cascade |
+| `paidAt` | DateTime | fecha del pago (mediodía de ese día en hora de Argentina) |
+| `amount` | Float? | opcional |
+| `note` | String? | ej. "transferencia" |
+
+Índice: `[customerId, paidAt]`.
+
+### AppSettings
+Configuración global de VEXKO, en **una sola fila** (`id = "global"`). Se edita en el panel admin
+(pestaña "Configuración") y se lee públicamente (`GET /api/public/settings`).
+
+| Campo | Tipo | Notas |
+|---|---|---|
+| `id` | String | PK, default `"global"` |
+| `whatsappNumber` | String? | solo dígitos con código de país (ej. `5492494000000`), para `wa.me` |
+| `priceBase`, `priceIntermedio`, `pricePremium` | Float? | precio mensual de cada plan; null = "Próximamente" en la landing |
+| `updatedAt` | DateTime | |
+
+### Kiosk
+Sucursal / punto de venta. Casi todos los datos operativos cuelgan de acá.
+
+| Campo | Tipo | Notas |
+|---|---|---|
+| `name` | String | único por cliente: `@@unique([customerId, name])` |
+| `address`, `phone` | String? | |
+| `active` | Boolean | default `false` — se activa desde el panel `/admin` |
+| `customerId` | FK → Customer | `onDelete: Cascade` |
+
+Relaciones: `user` (1:1), `clients`, `invoices`, `kioskProducts`, `sales`, `suppliers`,
+`cashFlows`, `employees`, `loyaltyRules`, `clientDebts`.
+
+### User
+Cuenta de login.
+
+| Campo | Tipo | Notas |
+|---|---|---|
+| `email` | String | `@unique` |
+| `passwordHash` | String | bcrypt |
+| `role` | String | `OWNER` (admin de Grupo Vexus, entra a `/admin`) \| `KIOSK` (cuenta de una sucursal, la crea el panel admin) \| `EMPLOYEE` (default de `/api/auth/register`, uso legado) |
+| `active` | Boolean | default `true` |
+| `kioskId` | String? | `@unique` → **una cuenta por sucursal**. `onDelete: SetNull` |
+
+### Employee
+Empleado de una sucursal **sin cuenta propia**: solo tiene un PIN (hasheado) que el
+dueño genera para abrir la caja y dejar registrado quién hizo el turno.
+
+| Campo | Tipo | Notas |
+|---|---|---|
+| `kioskId` | FK → Kiosk | Cascade |
+| `name` | String | |
+| `pinHash` | String | |
+| `active` | Boolean | default `true` |
+
+---
+
+## 2. Catálogo e inventario
+
+### Category
+`customerId = null` → categoría **global** (la del catálogo compartido).
+`customerId` con valor → categoría **propia** de ese cliente, invisible para el resto.
+
+| Campo | Tipo | Notas |
+|---|---|---|
+| `name` | String | `@@unique([customerId, name])` |
+| `description` | String? | |
+| `customerId` | FK? → Customer | Cascade |
+
+### Subcategory
+| Campo | Tipo | Notas |
+|---|---|---|
+| `name` | String | `@@unique([name, categoryId])` |
+| `categoryId` | FK → Category | |
+
+### Product
+Catálogo global + productos propios (`isCustom = true`, `customerId` del dueño).
+Un producto existe **una sola vez**; lo que varía por sucursal vive en `KioskProduct`.
+
+| Campo | Tipo | Notas |
+|---|---|---|
+| `name`, `description` | String / String? | |
+| `barcode`, `sku` | String? | ambos `@unique` **a nivel global** |
+| `loadMode` | String | `pack` (default) \| `unit` — cómo se carga el producto |
+| `basePrice`, `baseCost` | Float? | precio/costo base de referencia |
+| `packPrice`, `packUnits`, `packCount` | Float? / Int? | datos de carga por pack |
+| `categoryId`, `subcategoryId` | FK? | |
+| `isCustom` | Boolean | default `false` |
+| `customerId` | FK? → Customer | Cascade — dueño de un producto propio |
+| `stock`, `minStock`, `salePrice`, `costPrice` | Int? / Float? | **campos legados** de compatibilidad (la app vieja los esperaba en `Product`). El backend los usa como fallback cuando el `KioskProduct` no tiene valor |
+| `expiresAt` | DateTime? | vencimiento |
+| `supplierId` | FK? → Supplier | proveedor principal |
+| `active` | Boolean | default `true` (borrado lógico) |
+
+Índices: `categoryId`, `customerId`, `isCustom`, `[active, isCustom]`, `name`.
+
+### KioskProduct
+**El corazón del multi-tenant**: stock, precio y costo de un producto en una sucursal.
+
+| Campo | Tipo | Notas |
+|---|---|---|
+| `kioskId`, `productId` | FK | `@@unique([kioskId, productId])`, ambos Cascade |
+| `stock`, `minStock` | Int | default `0` |
+| `price` | Float? | precio de venta en esta sucursal (si es null se usa `Product.salePrice`) |
+| `cost` | Float? | **nuevo (sep-2026)** — costo en esta sucursal (si es null se usa `Product.costPrice`). Al recibir un pedido de proveedor se actualiza al costo unitario del pedido (último costo de compra) |
+| `barcodePrinted` | Boolean | si ya se imprimió la etiqueta (función premium) |
+
+Estado de stock que calcula el backend (`stockStatus`): `OUT` (stock 0),
+`CRITICAL` (≤ minStock), `ALERT`, `OK`.
+
+---
+
+## 3. Ventas
+
+### Sale
+| Campo | Tipo | Notas |
+|---|---|---|
+| `date` | DateTime | default `now()` |
+| `total` | Float | **ya con el descuento aplicado** |
+| `paymentMethod` | String | `CASH` \| `TRANSFER` \| `CARD` \| `MIXED` |
+| `cashAmount`, `transferAmount`, `cardAmount` | Float? | desglose (obligatorio en `MIXED`) |
+| `cashReceived`, `changeGiven` | Float? | vuelto |
+| `pointsEarned` | Int | default `0` — puntos sumados al cliente (sobre el total pagado) |
+| `discountAmount` | Float? | **nuevo** — monto descontado por cupón de puntos |
+| `redemptionId` | FK? → PointRedemption | **nuevo**, `@unique` — cupón usado en la venta |
+| `kioskId` | FK → Kiosk | |
+| `userId` | FK → User | |
+| `clientId` | FK? → Client | relación `"ClientSales"` |
+
+Índices: `kioskId`, `userId`, `date`, `createdAt`, `[kioskId, createdAt]`,
+`[userId, createdAt]`, `[paymentMethod, createdAt]`.
+
+### SaleItem
+| Campo | Tipo | Notas |
+|---|---|---|
+| `quantity` | Int | |
+| `unitPrice` | Float | precio al momento de la venta |
+| `unitCost` | Float? | **nuevo (oct-2026)** — costo al momento de la venta (`KioskProduct.cost ?? Product.costPrice`). Es lo que usan los reportes para el costo de lo vendido |
+| `subtotal` | Float | `quantity × unitPrice` |
+| `saleId` | FK → Sale | Cascade |
+| `productId` | FK → Product | |
+
+### Invoice (AFIP)
+| Campo | Tipo | Notas |
+|---|---|---|
+| `kioskId` | FK → Kiosk | Cascade |
+| `saleId` | String? | referencia suelta (sin FK) |
+| `invoiceType`, `invoiceNumber`, `status` | String | |
+| `total` | Float | |
+
+---
+
+## 4. Caja
+
+### CashRegister (turno / arqueo)
+| Campo | Tipo | Notas |
+|---|---|---|
+| `userId` | FK → User | la cuenta de la sucursal (por eso no tiene `kioskId` propio) |
+| `employeeId` | FK? → Employee | quién abrió el turno |
+| `status` | String | `OPEN` (default) \| `CLOSED` |
+| `openingAmount` | Float | efectivo inicial |
+| `expectedAmount`, `actualAmount`, `difference` | Float? | se completan al cerrar |
+| `notes` | String? | |
+| `openedAt`, `closedAt` | DateTime | |
+
+Efectivo esperado = `openingAmount + ventas en efectivo del turno − gastos del turno`.
+**Los cobros de fiado no entran en este cálculo** (ver [CLIENTES_FIADO_PUNTOS.md](CLIENTES_FIADO_PUNTOS.md)).
+
+### CashFlow
+| Campo | Tipo | Notas |
+|---|---|---|
+| `type` | String | `INCOME` \| `EXPENSE` |
+| `amount` | Float | |
+| `description` | String? | |
+| `category` | String? | ej. `Alquiler`, `Servicios`, `Compras` (pedido a proveedor en efectivo)… |
+| `paidFromCash` | Boolean | default `true`. "¿Salió de la caja?": en `false` (transferencia, débito…) cuenta como gasto en los reportes pero **no** se resta del efectivo esperado del arqueo. Los pedidos a proveedor en efectivo lo crean en `true` |
+| `kioskId` | FK → Kiosk | |
+| `createdAt` | DateTime | si el usuario elige una fecha (`YYYY-MM-DD`), se guarda esa fecha **con la hora actual** para que caiga dentro del turno abierto (evita el corrimiento por UTC-3) |
+
+---
+
+## 5. Proveedores y compras
+
+### Supplier
+| Campo | Tipo | Notas |
+|---|---|---|
+| `name` | String | único **por sucursal**: `@@unique([kioskId, name])` (hasta oct-2026 era único global) |
+| `phone`, `email`, `address` | String? | |
+| `kioskId` | FK? → Kiosk | |
+
+### SupplierProduct
+`cost`, `leadDays` (días de entrega). `@@unique([supplierId, productId])`.
+
+### Purchase (pedido a proveedor)
+| Campo | Tipo | Notas |
+|---|---|---|
+| `supplierId` | FK → Supplier | el kiosco se resuelve a través del proveedor |
+| `status` | String | `PENDING` (default) \| `RECEIVED` |
+| `paymentMethod` | String | default `CASH` |
+| `deliveryDate`, `receivedAt` | DateTime? | |
+| `totalAmount` | Float | |
+| `notes` | String? | |
+
+### PurchaseItem
+`quantity`, `unitCost`, `lineTotal`, FK a `Purchase` (Cascade) y `Product`.
+
+---
+
+## 6. Clientes finales (puntos y fiado) — plan PREMIUM
+
+Detalle funcional en [CLIENTES_FIADO_PUNTOS.md](CLIENTES_FIADO_PUNTOS.md).
+
+### Client
+| Campo | Tipo | Notas |
+|---|---|---|
+| `kioskId` | FK → Kiosk | Cascade — los clientes son **por sucursal** |
+| `name` | String | |
+| `phone` | String | `@@unique([kioskId, phone])` |
+| `points` | Int | saldo de puntos |
+| `totalSpent` | Float | acumulado |
+
+### LoyaltyRule
+Regla de puntos **por sucursal**. Al editarla se desactiva la anterior y se crea
+una nueva (queda historial).
+
+| Campo | Tipo | Notas |
+|---|---|---|
+| `kioskId` | FK → Kiosk | |
+| `amountPerPoint` | Float | pesos gastados por cada punto |
+| `pointsForDiscount` | Int | puntos necesarios para canjear |
+| `discountPercent` | Float | **% de descuento** (1–100). Antes era `discountAmount` (monto fijo) — renombrado en sep-2026 |
+| `active` | Boolean | una sola activa por sucursal |
+
+### PointRedemption (cupón de descuento)
+| Campo | Tipo | Notas |
+|---|---|---|
+| `clientId` | FK → Client | Cascade |
+| `pointsUsed` | Int | |
+| `discount` | Float | **porcentaje** copiado de la regla al canjear (el nombre del campo no lo dice) |
+| `code` | String | `@unique` — 8 dígitos empezando en `9`, también se imprime como código de barras CODE128 |
+| `status` | String | `PENDING` \| `USED` |
+| `usedAt` | DateTime? | |
+| `sale` | Sale? | venta donde se usó (1:1 vía `Sale.redemptionId`) |
+
+### ClientDebt (fiado)
+Cada fiado es su propia fila (no un saldo único) para tener historial y pagos
+parciales contra una deuda puntual.
+
+| Campo | Tipo | Notas |
+|---|---|---|
+| `clientId`, `kioskId` | FK | ambos Cascade |
+| `amount` | Float | monto adeudado |
+| `paidAmount` | Float | default `0` |
+| `status` | String | `PENDING` \| `PARTIAL` \| `PAID` |
+| `note` | String? | |
+
+Índices: `clientId`, `kioskId`, `[kioskId, status]`.
+
+### ClientDebtPayment
+`amount`, `createdAt`, FK a `ClientDebt` (Cascade).
+
+---
+
+## Reglas de borrado (onDelete)
+
+- Borrar un `Customer` borra en cascada sus kioscos, productos propios, categorías propias y pagos de suscripción.
+- Borrar un `Kiosk` borra en cascada: inventario, clientes (y con ellos fiados y cupones), empleados, reglas de puntos, facturas.
+  `Sale` y `CashFlow` **no** tienen cascade desde Kiosk (bloquearían el borrado), por eso
+  `DELETE /api/admin/kiosks/:id` y `DELETE /api/admin/customers/:id` borran a mano, dentro de una
+  transacción y en orden: proveedores + pedidos, ventas, facturas, flujo de caja, turnos de caja,
+  cuenta `User`, clientes y recién ahí el kiosco. Si agregás un modelo nuevo colgado de `Kiosk`
+  sin cascade, sumalo a esas dos rutas.
+- Borrar una `Sale` borra sus `SaleItem`. Si tenía cupón, la API lo vuelve a `PENDING` antes de borrar.
+- Borrar el `User` de una sucursal deja `kioskId` en null (`SetNull`).
+
+---
+
+## Historial de migraciones
+
+| Migración | Qué hace |
+|---|---|
+| `20260824060417_init_postgres` | Schema inicial en PostgreSQL (migración desde SQLite). |
+| `20260917011553_add_kiosk_product_cost_and_client_debts` | `KioskProduct.cost` + tablas `ClientDebt` y `ClientDebtPayment`. |
+| `20260917015926_loyalty_rule_discount_percent` | Rename `LoyaltyRule.discountAmount` → `discountPercent`. Preserva los valores: **revisar en prod**, un valor viejo en pesos (ej. 500) pasaría a leerse como 500 %. |
+| `20260917030221_redemption_codes` | `PointRedemption.code/status/usedAt`, `Sale.discountAmount/redemptionId`. Agrega `code NOT NULL` **sin backfill**: asume la tabla `PointRedemption` vacía. |
+| `20261024120000_sale_item_cost_and_supplier_unique_per_kiosk` | `Supplier.name` pasa de único global a `@@unique([kioskId, name])` (siempre aplicable: con la restricción vieja no puede haber duplicados por sucursal). Agrega `SaleItem.unitCost` y lo completa en las ventas existentes con el costo actual de la sucursal o del producto (aproximado). |
+| `20261025120000_customer_subscriptions` | `Customer.subscriptionStartedAt/lastPaymentAt/subscriptionExempt` + tabla `SubscriptionPayment`. A los clientes existentes `subscriptionStartedAt` les queda en el momento del deploy: nadie se bloquea al deployar, pero **hay que registrar los pagos reales después** (ver GUIA_DEPLOY). |
+| `20261025180000_app_settings` | Tabla `AppSettings` (WhatsApp y precios de planes), vacía. No toca datos existentes. |
+| `20261025200000_cashflow_paid_from_cash` | `CashFlow.paidFromCash BOOLEAN NOT NULL DEFAULT true`. Los gastos existentes quedan como "de la caja" (el comportamiento de antes). Segura con datos. |
+
+---
+
+## Observaciones conocidas del schema
+
+- **Los datos no se borran solos** (desde el 25-oct-2026). Antes, `cleanupOldSales` y
+  `cleanupOldPurchases` borraban cada 24 h las ventas, los pedidos y los gastos "Compras" de más de
+  2 meses de todas las sucursales. Ahora todo se conserva: la base crece con el uso (≈ 2 KB por
+  venta con sus ítems) y conviene vigilar el disco del VPS.
+
+- `Product.barcode`/`sku` son únicos globales: un producto propio no puede reutilizar el código de
+  barras de otro cliente, y un global que se clona como propio pierde su código en la copia.
+- `KioskProduct.stock` no tiene `CHECK >= 0` en la base: lo garantiza la API, que descuenta stock
+  con `updateMany` condicionado (`stock >= cantidad`).
+- `Purchase` y `CashRegister` no tienen `kioskId` directo; se aíslan vía `Supplier.kioskId` y `User.kioskId`.
+- Montos en `Float`: aceptable para un kiosco, pero los redondeos se hacen a mano (`Math.round(x * 100) / 100`).

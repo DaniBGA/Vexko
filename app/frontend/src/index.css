@@ -3,5 +3,6 @@
 @import "./styles/layout.css";
 @import "./styles/components.css";
 @import "./styles/auth.css";
+@import "./styles/dark.css";
 
 /* index.css is the single entrypoint for modular styles */

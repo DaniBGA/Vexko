@@ -3,11 +3,13 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import {
   Shield, Store, Trash2, Building2, KeyRound, Check, Power, ArrowLeft,
-  PlusCircle, ListChecks, Copy, Eye, EyeOff, Wand2, PartyPopper, ListTree,
+  PlusCircle, ListChecks, Copy, Eye, EyeOff, Wand2, PartyPopper, ListTree, Wallet, Settings,
 } from 'lucide-react';
 import { useAdminAuthStore } from '../../store/adminAuthStore.js';
 import { adminApi } from '../../lib/adminApi.js';
 import { PageHeader, Spinner, EmptyState } from '../ui/index.jsx';
+import SubscriptionPanel, { SubscriptionBadge } from '../admin/SubscriptionPanel.jsx';
+import SettingsPanel from '../admin/SettingsPanel.jsx';
 
 const NAVY = '#1c2050';
 const GREEN = '#4caf82';
@@ -122,7 +124,7 @@ export default function AdminPage() {
   const queryClient = useQueryClient();
   const user = useAdminAuthStore((s) => s.user);
 
-  const [tab, setTab] = useState('wizard'); // 'wizard' | 'manage'
+  const [tab, setTab] = useState('wizard'); // 'wizard' | 'manage' | 'settings'
   const [uiStep, setUiStep] = useState(1);
   const [step1Choice, setStep1Choice] = useState(null); // null | 'new' | 'existing'
   const [step2Choice, setStep2Choice] = useState(null); // null | 'new' | 'existing'
@@ -149,6 +151,7 @@ export default function AdminPage() {
   const [showPasswordChange, setShowPasswordChange] = useState(false);
   const [newPassword, setNewPassword] = useState('');
   const [showNewPassword, setShowNewPassword] = useState(false);
+  const [openSubscriptionId, setOpenSubscriptionId] = useState(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ['admin-kiosks'],
@@ -159,6 +162,9 @@ export default function AdminPage() {
   const kiosks = useMemo(() => customers.flatMap((customer) => customer.kiosks.map((kiosk) => ({ ...kiosk, customer }))), [customers]);
   const selectedCustomer = customers.find((c) => c.id === selectedCustomerId) || null;
   const selectedKiosk = kiosks.find((kiosk) => kiosk.id === selectedKioskId) || null;
+  // Cobranzas que requieren atención (se muestran arriba de "Ver mis kioscos").
+  const warningCustomers = customers.filter((c) => c.subscription?.status === 'WARNING');
+  const blockedCustomers = customers.filter((c) => c.subscription?.status === 'BLOCKED');
 
   useEffect(() => {
     if (selectedCustomerId && !customers.some((c) => c.id === selectedCustomerId)) {
@@ -434,10 +440,22 @@ export default function AdminPage() {
           >
             <ListTree size={17} /> Ver mis kioscos {kiosks.length > 0 && `(${kiosks.length})`}
           </button>
+          <button
+            type="button"
+            onClick={() => setTab('settings')}
+            className="inline-flex items-center gap-2 rounded-xl px-5 py-3 text-sm font-800 transition"
+            style={tab === 'settings' ? { background: NAVY, color: '#fff' } : { color: '#6b7280' }}
+          >
+            <Settings size={17} /> Configuración
+          </button>
         </div>
       </div>
 
-      {tab === 'wizard' ? (
+      {tab === 'settings' ? (
+        <div className="p-6 max-w-2xl w-full mx-auto">
+          <SettingsPanel />
+        </div>
+      ) : tab === 'wizard' ? (
         <div className="p-6 max-w-2xl w-full mx-auto">
           <div className="card p-6 sm:p-8">
             {isLoading ? (
@@ -910,6 +928,20 @@ export default function AdminPage() {
             </div>
 
             <div className="p-5">
+              {(warningCustomers.length > 0 || blockedCustomers.length > 0) && (
+                <div className="mb-4 space-y-2">
+                  {blockedCustomers.length > 0 && (
+                    <div className="rounded-xl px-4 py-3 text-sm font-700" style={{ background: '#fdecea', color: '#c0392b' }}>
+                      {blockedCustomers.length} inhabilitado{blockedCustomers.length === 1 ? '' : 's'} por falta de pago: {blockedCustomers.map((c) => c.name).join(', ')}
+                    </div>
+                  )}
+                  {warningCustomers.length > 0 && (
+                    <div className="rounded-xl px-4 py-3 text-sm font-700" style={{ background: '#fff4e0', color: '#b45309' }}>
+                      {warningCustomers.length} con la cuota vencida, en los días de gracia: {warningCustomers.map((c) => `${c.name} (${c.subscription.daysLeft} d)`).join(', ')}
+                    </div>
+                  )}
+                </div>
+              )}
               {isLoading ? (
                 <Spinner />
               ) : customers.length === 0 ? (
@@ -925,19 +957,35 @@ export default function AdminPage() {
                             <span className="text-[10px] font-800 uppercase tracking-wide rounded-full px-2 py-0.5" style={{ background: '#e8f8ee', color: '#2e7d32' }}>
                               {PLAN_LABELS[customer.plan] || customer.plan}
                             </span>
+                            <SubscriptionBadge subscription={customer.subscription} />
                           </div>
                           <div className="text-xs text-gray-500">{customer.kiosks.length} sucursal{customer.kiosks.length === 1 ? '' : 'es'}</div>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteCustomer(customer)}
-                          disabled={deleteCustomerMutation.isPending}
-                          className="inline-flex items-center gap-2 rounded-xl border border-red-200 bg-white px-3 py-2 text-xs font-700 text-red-700 hover:bg-red-50 disabled:opacity-60"
-                        >
-                          <Trash2 size={14} />
-                          Borrar
-                        </button>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => setOpenSubscriptionId((current) => (current === customer.id ? null : customer.id))}
+                            className="inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-800"
+                            style={openSubscriptionId === customer.id ? { background: NAVY, color: '#fff' } : { background: '#eef0f7', color: NAVY }}
+                          >
+                            <Wallet size={14} />
+                            Suscripción
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteCustomer(customer)}
+                            disabled={deleteCustomerMutation.isPending}
+                            className="inline-flex items-center gap-2 rounded-xl border border-red-200 bg-white px-3 py-2 text-xs font-700 text-red-700 hover:bg-red-50 disabled:opacity-60"
+                          >
+                            <Trash2 size={14} />
+                            Borrar
+                          </button>
+                        </div>
                       </div>
+
+                      {openSubscriptionId === customer.id && customer.subscription && (
+                        <SubscriptionPanel customer={customer} />
+                      )}
 
                       <div className="divide-y divide-slate-200">
                         {customer.kiosks.length === 0 ? (

@@ -14,18 +14,40 @@
 .sidebar-nav{padding:10px 0;flex:1;overflow:auto}
 
 .sidebar-footer{padding:16px;border-top:1px solid rgba(255,255,255,0.03);background:linear-gradient(180deg,transparent,rgba(0,0,0,0.02));}
-.nav-section-label{font-size:0.62rem;font-weight:700;color:#5a6399;padding:10px 18px 5px}
+.sidebar-credit{margin-top:10px;font-size:0.68rem;color:var(--muted);text-align:center}
+.sidebar-credit a{color:#cbd5ff;font-weight:700}
+.sidebar-credit a:hover{color:#fff;text-decoration:underline}
+.nav-section-label{font-size:0.62rem;font-weight:700;color:#7d86c0;padding:10px 18px 5px}
 .nav-link{display:flex;align-items:center;gap:10px;padding:9px 18px;color:#b7c0e6;font-size:0.83rem;cursor:pointer;border:none;background:none;width:100%;text-align:left}
 .nav-link:hover{background:rgba(255,255,255,0.04);color:#fff}
 .nav-link.active{background:rgba(76,175,130,0.12);color:var(--brand-green);font-weight:600;border-left:3px solid var(--brand-green)}
 .nav-link .badge{margin-left:auto;background:#e74c3c;color:#fff;font-size:0.62rem;font-weight:700;border-radius:10px;padding:1px 6px}
 
 /* Main content and topbar */
-.main-content{flex:1;display:flex;flex-direction:column;background:var(--bg-page);margin-left:260px}
+.main-content{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--bg-page);margin-left:260px}
 .topbar{background:var(--card-bg);border-bottom:1px solid #e8eaf0;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:10}
 .topbar h1{font-size:1.05rem;font-weight:700;color:var(--brand-dark)}
 .topbar .topbar-actions{display:flex;gap:10px;align-items:center}
+.theme-toggle{width:36px;height:36px;display:inline-flex;align-items:center;justify-content:center;border-radius:8px;border:1.5px solid #dde;background:transparent;color:var(--sidebar-bg);cursor:pointer}
+.theme-toggle:hover{background:#f3f4fa}
+html.dark .theme-toggle{border-color:#3a4266;color:#fcd34d}
+html.dark .theme-toggle:hover{background:#232842}
 
 .page-body{padding:24px}
 
-@media (max-width:768px){.sidebar{display:none}.page-body{padding:12px}.main-content{margin-left:0}}
+/* Menú en pantallas angostas: la sidebar se abre por encima con el botón ☰ */
+.menu-toggle{display:none;width:36px;height:36px;align-items:center;justify-content:center;border-radius:8px;border:1.5px solid #dde;background:transparent;color:var(--sidebar-bg);cursor:pointer}
+html.dark .menu-toggle{border-color:#3a4266;color:#c3c9f2}
+.sidebar-backdrop{position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:19}
+
+@media (max-width:768px){
+  .sidebar{transform:translateX(-100%);transition:transform .2s ease;box-shadow:none}
+  .sidebar.open{transform:none;box-shadow:0 0 30px rgba(0,0,0,0.35)}
+  .menu-toggle{display:inline-flex}
+  .topbar{padding:10px 12px}
+  .topbar-date{display:none}
+  .page-body{padding:12px}
+  .main-content{margin-left:0}
+  /* Tablas anchas (stock, historial, pedidos): se deslizan dentro de la tarjeta */
+  .card,.card.overflow-hidden{overflow-x:auto}
+}

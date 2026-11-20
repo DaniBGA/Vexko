@@ -20,7 +20,7 @@ export default function AdminLoginPage() {
     <div className="min-h-screen bg-brand-sidebar flex items-center justify-center p-6">
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
-          <Logo className="h-10 mx-auto mb-4" />
+          <Logo onDark className="h-10 mx-auto mb-4" />
           <div className="inline-flex items-center gap-2 text-slate-300 text-sm justify-center">
             <Shield size={14} /> Acceso de administración
           </div>

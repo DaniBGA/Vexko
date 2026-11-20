@@ -4,6 +4,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { prisma } from '../config/prisma.js';
 import { requireAuth } from '../middleware/auth.js';
+import { SUBSCRIPTION_SELECT, withSubscription } from '../lib/subscription.js';
 
 export const authRouter = Router();
 
@@ -14,16 +15,20 @@ authRouter.post('/login', async (req, res, next) => {
     if (!email || !password) {
       return res.status(400).json({ error: 'Email y contraseña requeridos' });
     }
-    const user = await prisma.user.findUnique({ where: { email }, include: { kiosk: { include: { customer: { select: { id: true, name: true, plan: true } } } } } });
-    if (!user) {
-      return res.status(401).json({ error: 'Usuario no encontrado' });
+    // El panel admin guarda los emails en minúsculas: sin normalizar acá,
+    // "Sucursal@..." no entraba aunque la contraseña fuera correcta.
+    const user = await prisma.user.findFirst({
+      where: { email: { equals: String(email).trim(), mode: 'insensitive' } },
+      include: { kiosk: { include: { customer: { select: { id: true, name: true, plan: true, ...SUBSCRIPTION_SELECT } } } } },
+    });
+    // Mismo mensaje para email inexistente y contraseña incorrecta: antes se
+    // distinguían y eso permitía averiguar qué emails tienen cuenta.
+    const valid = user ? await bcrypt.compare(String(password), user.passwordHash) : false;
+    if (!user || !valid) {
+      return res.status(401).json({ error: 'Email o contraseña incorrectos' });
     }
     if (!user.active) {
       return res.status(403).json({ error: 'Cuenta desactivada' });
-    }
-    const valid = await bcrypt.compare(password, user.passwordHash);
-    if (!valid) {
-      return res.status(401).json({ error: 'Contraseña incorrecta' });
     }
     // Si es usuario de kiosco, verificar estado de la sucursal
     if (user.kioskId) {
@@ -35,9 +40,12 @@ authRouter.post('/login', async (req, res, next) => {
     const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, {
       expiresIn: process.env.JWT_EXPIRES_IN || '7d',
     });
+    // Con la suscripción vencida el login igual funciona: el front recibe
+    // `kiosk.customer.subscription.status === 'BLOCKED'` y muestra la pantalla
+    // de suscripción vencida (el resto de la API responde 402).
     res.json({
       token,
-      user: { id: user.id, name: user.name, email: user.email, role: user.role, kioskId: user.kioskId, kiosk: user.kiosk },
+      user: { id: user.id, name: user.name, email: user.email, role: user.role, kioskId: user.kioskId, kiosk: withSubscription(user.kiosk) },
     });
   } catch (err) {
     next(err);
@@ -47,7 +55,7 @@ authRouter.post('/login', async (req, res, next) => {
 // GET /api/auth/me
 authRouter.get('/me', requireAuth, (req, res) => {
   const { id, name, email, role, kioskId, kiosk } = req.user;
-  res.json({ id, name, email, role, kioskId, kiosk });
+  res.json({ id, name, email, role, kioskId, kiosk: withSubscription(kiosk) });
 });
 
 // POST /api/auth/register  (solo el dueño puede crear cuentas nuevas)

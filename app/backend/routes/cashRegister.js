@@ -54,7 +54,9 @@ async function getRegisterSummary(register) {
     }),
     prisma.cashFlow.aggregate({
       _sum: { amount: true },
-      where: { type: 'EXPENSE', createdAt: { gte: register.openedAt, lte: endDate }, ...kioskWhere },
+      // Solo lo que salió de la caja: antes se restaba todo gasto del turno, y un
+      // alquiler pagado por transferencia dejaba el esperado en negativo.
+      where: { type: 'EXPENSE', paidFromCash: true, createdAt: { gte: register.openedAt, lte: endDate }, ...kioskWhere },
     }),
   ]);
 
@@ -102,7 +104,7 @@ async function getRegisterSummariesBatch(kioskId, registers) {
       select: { createdAt: true, paymentMethod: true, cashAmount: true, transferAmount: true, cardAmount: true },
     }),
     prisma.cashFlow.findMany({
-      where: { kioskId, type: 'EXPENSE', createdAt: { gte: rangeStart, lte: rangeEnd } },
+      where: { kioskId, type: 'EXPENSE', paidFromCash: true, createdAt: { gte: rangeStart, lte: rangeEnd } },
       select: { createdAt: true, amount: true },
     }),
   ]);
@@ -194,10 +196,17 @@ cashRegisterRouter.get('/', async (req, res, next) => {
     ]);
 
     const summaries = await getRegisterSummariesBatch(kiosk.id, registers);
-    const enriched = registers.map((register) => ({
-      ...register,
-      ...summaries.get(register.id),
-    }));
+    // El esperado se recalcula en vivo (si se editó o borró una venta del
+    // turno después del cierre, cambia), pero la diferencia salía del valor
+    // guardado al cerrar: en el historial esperado − contado no daba la
+    // diferencia que se mostraba al lado. Se recalcula con el mismo esperado.
+    const enriched = registers.map((register) => {
+      const summary = summaries.get(register.id);
+      const difference = register.status === 'CLOSED' && register.actualAmount != null && summary
+        ? Math.round((register.actualAmount - summary.expectedCashBeforeClose) * 100) / 100
+        : register.difference;
+      return { ...register, ...summary, difference };
+    });
 
     res.json({
       registers: enriched,
@@ -215,6 +224,12 @@ cashRegisterRouter.post('/open', async (req, res, next) => {
     const kiosk = await resolveRequestKiosk(req);
     if (!kiosk) {
       return res.status(400).json({ error: 'No hay kiosko configurado' });
+    }
+
+    // Antes parseFloat(undefined) guardaba NaN y Prisma respondía un 500.
+    const openingAmount = parseFloat(req.body.openingAmount);
+    if (!Number.isFinite(openingAmount) || openingAmount < 0) {
+      return res.status(400).json({ error: 'Ingresá un monto de apertura válido' });
     }
 
     const existing = await prisma.cashRegister.findFirst({ where: { status: 'OPEN', user: { kioskId: kiosk.id } } });
@@ -243,15 +258,23 @@ cashRegisterRouter.post('/open', async (req, res, next) => {
       employeeId = employee.id;
     }
 
-    const register = await prisma.cashRegister.create({
-      data: {
-        userId: req.user.id,
-        employeeId,
-        openingAmount: parseFloat(req.body.openingAmount),
-        notes: req.body.notes,
-      },
-      include: { employee: EMPLOYEE_SELECT },
-    });
+    // Se vuelve a chequear adentro de una transacción serializable: con dos
+    // clics seguidos en "Abrir caja" las dos requests pasaban el chequeo de
+    // arriba y quedaban dos turnos abiertos, que se pisan en el arqueo (las
+    // ventas del período se cuentan en los dos).
+    const register = await prisma.$transaction(async (tx) => {
+      const alreadyOpen = await tx.cashRegister.findFirst({ where: { status: 'OPEN', user: { kioskId: kiosk.id } }, select: { id: true } });
+      if (alreadyOpen) throw Object.assign(new Error('Ya hay una caja abierta'), { statusCode: 409 });
+      return tx.cashRegister.create({
+        data: {
+          userId: req.user.id,
+          employeeId,
+          openingAmount,
+          notes: req.body.notes,
+        },
+        include: { employee: EMPLOYEE_SELECT },
+      });
+    }, { isolationLevel: 'Serializable' });
     res.status(201).json(register);
   } catch (err) { next(err); }
 });
@@ -265,18 +288,30 @@ cashRegisterRouter.post('/:id/close', async (req, res, next) => {
       return res.status(404).json({ error: 'Caja no encontrada' });
     }
 
+    const actual = parseFloat(actualAmount);
+    if (!Number.isFinite(actual) || actual < 0) {
+      return res.status(400).json({ error: 'Ingresá el efectivo contado' });
+    }
+
     const register = await prisma.cashRegister.findFirstOrThrow({ where: { id: req.params.id, user: { kioskId: kiosk.id } }, include: { user: { select: { kioskId: true } } } });
     if (register.status === 'CLOSED') return res.status(400).json({ error: 'Caja ya cerrada' });
 
     const now = new Date();
-    const summary = await getRegisterSummary(register);
+    // El resumen se calcula hasta `now`, el mismo instante que queda como
+    // closedAt (antes cada uno tomaba su propio new Date()).
+    const summary = await getRegisterSummary({ ...register, closedAt: now });
     const expectedAmount = summary.expectedCashBeforeClose;
-    const actual = parseFloat(actualAmount);
-    const difference = actual - expectedAmount;
+    const difference = Math.round((actual - expectedAmount) * 100) / 100;
 
-    const updated = await prisma.cashRegister.update({
-      where: { id: req.params.id },
+    // updateMany con status OPEN: si se cierra dos veces a la vez, solo una gana.
+    const { count } = await prisma.cashRegister.updateMany({
+      where: { id: register.id, status: 'OPEN' },
       data: { status: 'CLOSED', closedAt: now, expectedAmount, actualAmount: actual, difference, notes },
+    });
+    if (count === 0) return res.status(400).json({ error: 'Caja ya cerrada' });
+
+    const updated = await prisma.cashRegister.findUnique({
+      where: { id: register.id },
       include: { employee: EMPLOYEE_SELECT },
     });
     res.json({

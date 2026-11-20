@@ -7,6 +7,14 @@
   --bg-page:#f5f6fa;
   --card-bg:#ffffff;
   --accent:#4caf82;
+  /* Para estilos inline (style={{...}}): ver su versión oscura en dark.css */
+  --navy-text:#1c2050;
+  --navy-solid:#1c2050;
+  --soft-navy-bg:#eef0f7;
+  --soft-green-bg:#f7fdfa;
+  --ok-bg:#e8f8ee;
+  --ok-border:#cdeedd;
+  --ok-text:#2e7d32;
 }
 
 html,body{background:var(--bg-page);color:var(--brand-dark)}

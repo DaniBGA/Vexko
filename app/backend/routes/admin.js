@@ -3,8 +3,33 @@ import bcrypt from 'bcryptjs';
 import { Router } from 'express';
 import { prisma } from '../config/prisma.js';
 import { requireAuth, requireOwner } from '../middleware/auth.js';
+import { getSubscriptionStatus, isAfterTodayAr, parseArDate } from '../lib/subscription.js';
+import { getAppSettings, normalizeWhatsappNumber, PLAN_PRICE_FIELDS, saveAppSettings } from '../lib/settings.js';
 
 export const adminRouter = Router();
+
+// Pagos que se muestran en el panel por cliente (el resto queda en la base).
+const PAYMENTS_SHOWN = 12;
+
+function withCustomerSubscription(customer) {
+  return { ...customer, subscription: getSubscriptionStatus(customer) };
+}
+
+// lastPaymentAt es el paidAt más reciente: se recalcula (no solo se pisa con
+// el pago nuevo) porque se puede cargar un pago con fecha anterior al último,
+// o borrar el último por error.
+async function refreshLastPayment(tx, customerId) {
+  const latest = await tx.subscriptionPayment.findFirst({
+    where: { customerId },
+    orderBy: { paidAt: 'desc' },
+    select: { paidAt: true },
+  });
+  return tx.customer.update({
+    where: { id: customerId },
+    data: { lastPaymentAt: latest?.paidAt ?? null },
+    include: { subscriptionPayments: { orderBy: { paidAt: 'desc' }, take: PAYMENTS_SHOWN } },
+  });
+}
 
 function normalizePlan(value) {
   const plan = String(value || 'BASE').toUpperCase();
@@ -78,8 +103,9 @@ adminRouter.post('/login', async (req, res, next) => {
       return res.status(400).json({ error: 'Email y contraseña requeridos' });
     }
 
-    const user = await prisma.user.findUnique({
-      where: { email },
+    // Sin distinguir mayúsculas, como el login de sucursales (routes/auth.js).
+    const user = await prisma.user.findFirst({
+      where: { email: { equals: String(email).trim(), mode: 'insensitive' } },
       include: { kiosk: { include: { customer: { select: { id: true, name: true, plan: true } } } } },
     });
 
@@ -123,10 +149,125 @@ adminRouter.get('/kiosks', async (_req, res, next) => {
             user: { select: { id: true, name: true, email: true, role: true, active: true, kioskId: true } },
           },
         },
+        subscriptionPayments: { orderBy: { paidAt: 'desc' }, take: PAYMENTS_SHOWN },
       },
     });
 
-    res.json({ customers });
+    res.json({ customers: customers.map(withCustomerSubscription) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Registrar el pago de la cuota mensual. paidAt es "YYYY-MM-DD" (hoy si no
+// viene); el ciclo siguiente se cuenta desde esa fecha.
+adminRouter.post('/customers/:id/payments', async (req, res, next) => {
+  try {
+    const customer = await prisma.customer.findUnique({ where: { id: req.params.id }, select: { id: true } });
+    if (!customer) return res.status(404).json({ error: 'Cliente no encontrado' });
+
+    const paidAt = req.body.paidAt ? parseArDate(req.body.paidAt) : new Date();
+    if (!paidAt) return res.status(400).json({ error: 'La fecha de pago no es válida' });
+    if (isAfterTodayAr(paidAt)) return res.status(400).json({ error: 'La fecha de pago no puede ser futura' });
+
+    let amount = null;
+    if (req.body.amount !== undefined && req.body.amount !== null && req.body.amount !== '') {
+      amount = parseFloat(req.body.amount);
+      if (!Number.isFinite(amount) || amount < 0) return res.status(400).json({ error: 'El monto no es válido' });
+      amount = Math.round(amount * 100) / 100;
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+      await tx.subscriptionPayment.create({
+        data: { customerId: customer.id, paidAt, amount, note: String(req.body.note || '').trim() || null },
+      });
+      return refreshLastPayment(tx, customer.id);
+    });
+
+    res.status(201).json({ customer: withCustomerSubscription(updated) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Borrar un pago cargado por error.
+adminRouter.delete('/customers/:id/payments/:paymentId', async (req, res, next) => {
+  try {
+    const payment = await prisma.subscriptionPayment.findFirst({
+      where: { id: req.params.paymentId, customerId: req.params.id },
+      select: { id: true, customerId: true },
+    });
+    if (!payment) return res.status(404).json({ error: 'Pago no encontrado' });
+
+    const updated = await prisma.$transaction(async (tx) => {
+      await tx.subscriptionPayment.delete({ where: { id: payment.id } });
+      return refreshLastPayment(tx, payment.customerId);
+    });
+
+    res.json({ customer: withCustomerSubscription(updated) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Configuración global: WhatsApp de contacto y precio mensual de cada plan.
+adminRouter.get('/settings', async (_req, res, next) => {
+  try {
+    res.json(await getAppSettings());
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Body: { whatsappNumber?, planPrices?: { BASE?, INTERMEDIO?, PREMIUM? } }.
+// Un precio vacío/null lo deja en "Próximamente" en la landing.
+adminRouter.put('/settings', async (req, res, next) => {
+  try {
+    const data = {};
+
+    if (req.body.whatsappNumber !== undefined) {
+      const { value, error } = normalizeWhatsappNumber(req.body.whatsappNumber);
+      if (error) return res.status(400).json({ error });
+      data.whatsappNumber = value;
+    }
+
+    const prices = req.body.planPrices || {};
+    for (const [plan, field] of Object.entries(PLAN_PRICE_FIELDS)) {
+      if (prices[plan] === undefined) continue;
+      if (prices[plan] === null || prices[plan] === '') {
+        data[field] = null;
+        continue;
+      }
+      const price = parseFloat(prices[plan]);
+      if (!Number.isFinite(price) || price < 0) {
+        return res.status(400).json({ error: `El precio del plan ${plan.toLowerCase()} no es válido` });
+      }
+      data[field] = Math.round(price * 100) / 100;
+    }
+
+    res.json(await saveAppSettings(data));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Por ahora solo marca/desmarca al cliente como exento de la suscripción.
+adminRouter.patch('/customers/:id', async (req, res, next) => {
+  try {
+    const customer = await prisma.customer.findUnique({ where: { id: req.params.id }, select: { id: true } });
+    if (!customer) return res.status(404).json({ error: 'Cliente no encontrado' });
+
+    const data = {};
+    if (req.body.subscriptionExempt !== undefined) {
+      data.subscriptionExempt = req.body.subscriptionExempt === true || req.body.subscriptionExempt === 'true';
+    }
+
+    const updated = await prisma.customer.update({
+      where: { id: customer.id },
+      data,
+      include: { subscriptionPayments: { orderBy: { paidAt: 'desc' }, take: PAYMENTS_SHOWN } },
+    });
+    res.json({ customer: withCustomerSubscription(updated) });
   } catch (err) {
     next(err);
   }

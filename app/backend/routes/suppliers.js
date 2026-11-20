@@ -6,8 +6,6 @@ import { requireAuth, resolveRequestKiosk } from '../middleware/auth.js';
 export const suppliersRouter = Router();
 suppliersRouter.use(requireAuth);
 
-const MAX_HISTORY_MONTHS = 2;
-
 function toNumber(value) {
   if (value === undefined || value === null || value === '') return undefined;
   const parsed = Number(value);
@@ -35,12 +33,6 @@ function parseLimit(value) {
   const parsed = parseInt(value, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) return 8;
   return Math.min(parsed, 20);
-}
-
-function getHistoryCutoff() {
-  const cutoff = new Date();
-  cutoff.setMonth(cutoff.getMonth() - MAX_HISTORY_MONTHS);
-  return cutoff;
 }
 
 // `stock`/`minStock` acá son del Product global (legacy); el stock real de
@@ -124,23 +116,6 @@ function buildSupplierInclude(kioskId) {
   };
 }
 
-export async function cleanupOldPurchases(force = false) {
-  const cutoff = getHistoryCutoff();
-  const removedPurchases = await prisma.purchase.deleteMany({
-    where: { createdAt: { lt: cutoff } },
-  });
-
-  await prisma.cashFlow.deleteMany({
-    where: {
-      type: 'EXPENSE',
-      category: 'Compras',
-      createdAt: { lt: cutoff },
-    },
-  });
-
-  return removedPurchases;
-}
-
 suppliersRouter.get('/', async (req, res, next) => {
   try {
     const kiosk = await resolveRequestKiosk(req);
@@ -148,7 +123,7 @@ suppliersRouter.get('/', async (req, res, next) => {
 
     const { search } = req.query;
     const where = { kioskId: kiosk.id };
-    if (search) where.name = { contains: String(search).trim() };
+    if (search) where.name = { contains: String(search).trim(), mode: 'insensitive' };
 
     const suppliers = await prisma.supplier.findMany({
       where,
@@ -177,12 +152,9 @@ suppliersRouter.get('/:id', async (req, res, next) => {
     const page = parsePage(req.query.page);
     const limit = parseLimit(req.query.limit);
     const skip = (page - 1) * limit;
-    const cutoff = getHistoryCutoff();
-
-    const where = {
-      supplierId: supplier.id,
-      createdAt: { gte: cutoff },
-    };
+    // Antes solo se listaban (y se guardaban) los pedidos de los últimos 2 meses:
+    // un borrado diario eliminaba los más viejos. Ahora el historial es completo.
+    const where = { supplierId: supplier.id };
 
     const [totalPurchases, purchases, detail] = await Promise.all([
       prisma.purchase.count({ where }),
@@ -237,6 +209,9 @@ suppliersRouter.put('/:id', async (req, res, next) => {
     if (!kiosk) throw Object.assign(new Error('No hay kiosko configurado'), { statusCode: 400 });
     const supplier = await prisma.supplier.findFirst({ where: { id: req.params.id, kioskId: kiosk.id } });
     if (!supplier) throw Object.assign(new Error('Proveedor no encontrado'), { statusCode: 404 });
+    if (req.body.name !== undefined && !String(req.body.name).trim()) {
+      return res.status(400).json({ error: 'El nombre del proveedor es obligatorio' });
+    }
     const updated = await prisma.supplier.update({
       where: { id: supplier.id },
       data: {
@@ -259,7 +234,14 @@ suppliersRouter.delete('/:id', async (req, res, next) => {
     if (!kiosk) throw Object.assign(new Error('No hay kiosko configurado'), { statusCode: 400 });
     const supplier = await prisma.supplier.findFirst({ where: { id: req.params.id, kioskId: kiosk.id } });
     if (!supplier) throw Object.assign(new Error('Proveedor no encontrado'), { statusCode: 404 });
-    await prisma.supplier.delete({ where: { id: supplier.id } });
+    // Purchase → Supplier no tiene cascade: borrar un proveedor con pedidos
+    // fallaba con un error de clave foránea (500). Se borran sus pedidos en la
+    // misma transacción, igual que hace el panel admin al borrar una sucursal.
+    // Los gastos "Compras" ya registrados en el flujo de caja se conservan.
+    await prisma.$transaction([
+      prisma.purchase.deleteMany({ where: { supplierId: supplier.id } }),
+      prisma.supplier.delete({ where: { id: supplier.id } }),
+    ]);
     res.status(204).end();
   } catch (err) {
     next(err);
@@ -274,13 +256,31 @@ suppliersRouter.post('/:id/orders', async (req, res, next) => {
     if (!supplier) throw Object.assign(new Error('Proveedor no encontrado'), { statusCode: 404 });
     const paymentMethod = normalizePaymentMethod(req.body.paymentMethod);
     const rawItems = Array.isArray(req.body.items) ? req.body.items : [];
-    const items = rawItems
-      .map((item) => ({
-        productId: String(item.productId || '').trim(),
-        quantity: Math.max(1, toInt(item.quantity) || 0),
-        unitCost: toNumber(item.unitCost),
-      }))
-      .filter((item) => item.productId && item.quantity > 0);
+
+    // Antes `Math.max(1, ...)` convertía una cantidad 0, negativa o inválida
+    // en 1 sin avisar. Ahora se rechaza, y el mismo producto repetido en dos
+    // líneas se suma en una sola (si no, products.length !== items.length
+    // daba "no existen o no están activos" aunque el producto existiera).
+    const itemsByProduct = new Map();
+    for (const raw of rawItems) {
+      const productId = String(raw?.productId || '').trim();
+      const quantity = Number(raw?.quantity);
+      const unitCost = toNumber(raw?.unitCost);
+      if (!productId) continue;
+      if (!Number.isInteger(quantity) || quantity <= 0) {
+        return res.status(400).json({ error: 'Las cantidades del pedido tienen que ser números enteros mayores a cero' });
+      }
+      if (unitCost !== undefined && unitCost < 0) {
+        return res.status(400).json({ error: 'El costo de un producto no puede ser negativo' });
+      }
+      const current = itemsByProduct.get(productId);
+      itemsByProduct.set(productId, {
+        productId,
+        quantity: (current?.quantity || 0) + quantity,
+        unitCost: unitCost ?? current?.unitCost,
+      });
+    }
+    const items = Array.from(itemsByProduct.values());
 
     if (!items.length) {
       return res.status(400).json({ error: 'El pedido debe tener al menos un producto' });
@@ -298,6 +298,7 @@ suppliersRouter.post('/:id/orders', async (req, res, next) => {
       },
       include: {
         subcategory: { include: { category: true } },
+        kioskProducts: { where: { kioskId: kiosk.id }, select: { cost: true } },
       },
     });
 
@@ -305,21 +306,25 @@ suppliersRouter.post('/:id/orders', async (req, res, next) => {
       return res.status(400).json({ error: 'Hay productos del pedido que no existen o no están activos' });
     }
 
+    // Costo unitario: el que manda el front, o el costo de ESTA sucursal. Antes
+    // caía al costPrice del Product (null en el catálogo global) y, si tampoco
+    // había, al PRECIO DE VENTA: el pedido (y el gasto en caja si se pagaba en
+    // efectivo) quedaba valuado a precio de venta en vez de a costo.
     const purchaseItems = items.map((item) => {
       const product = products.find((current) => current.id === item.productId);
       const packCost = product.loadMode === 'pack' && product.packPrice && product.packUnits
         ? Number(product.packPrice) / Number(product.packUnits)
         : null;
-      const unitCost = item.unitCost ?? product.costPrice ?? packCost ?? product.salePrice ?? 0;
+      const unitCost = item.unitCost ?? product.kioskProducts[0]?.cost ?? product.costPrice ?? packCost ?? 0;
       return {
         productId: product.id,
         quantity: item.quantity,
         unitCost,
-        lineTotal: unitCost * item.quantity,
+        lineTotal: Math.round(unitCost * item.quantity * 100) / 100,
       };
     });
 
-    const totalAmount = purchaseItems.reduce((sum, item) => sum + item.lineTotal, 0);
+    const totalAmount = Math.round(purchaseItems.reduce((sum, item) => sum + item.lineTotal, 0) * 100) / 100;
 
     const purchase = await prisma.$transaction(async (tx) => {
       const createdPurchase = await tx.purchase.create({
@@ -347,6 +352,7 @@ suppliersRouter.post('/:id/orders', async (req, res, next) => {
             type: 'EXPENSE',
             amount: totalAmount,
             category: 'Compras',
+            paidFromCash: true,
             description: `Compra a proveedor: ${supplier.name}${req.body.notes ? ` — ${String(req.body.notes).trim()}` : ''}`,
           },
         });
@@ -412,26 +418,42 @@ suppliersRouter.post('/:supplierId/orders/:purchaseId/receive', async (req, res,
 
     const receivedAt = new Date();
     const updatedPurchase = await prisma.$transaction(async (tx) => {
+      // Se marca recibido PRIMERO y solo si seguía pendiente: con un doble
+      // clic (o dos pestañas) las dos requests pasaban el chequeo de arriba
+      // y el stock del pedido se sumaba dos veces.
+      const { count } = await tx.purchase.updateMany({
+        where: { id: purchase.id, status: { not: 'RECEIVED' } },
+        data: { status: 'RECEIVED', receivedAt },
+      });
+      if (count === 0) {
+        throw Object.assign(new Error('El pedido ya fue recibido'), { statusCode: 400 });
+      }
+
       for (const item of purchase.items) {
+        // El costo del pedido pasa a ser el costo actual del producto en la
+        // sucursal (último costo de compra). Si el producto todavía no estaba
+        // en el stock, se crea con el precio de venta que tenga el producto —
+        // antes quedaba con precio null y después no se podía vender.
+        const hasCost = Number.isFinite(item.unitCost) && item.unitCost > 0;
         await tx.kioskProduct.upsert({
           where: { kioskId_productId: { kioskId: kiosk.id, productId: item.productId } },
           create: {
             kioskId: kiosk.id,
             productId: item.productId,
             stock: item.quantity,
-            minStock: 0,
-            price: null,
+            minStock: item.product.minStock ?? 0,
+            price: item.product.salePrice ?? null,
+            cost: hasCost ? item.unitCost : (item.product.costPrice ?? null),
           },
-          update: { stock: { increment: item.quantity } },
+          update: {
+            stock: { increment: item.quantity },
+            ...(hasCost ? { cost: item.unitCost } : {}),
+          },
         });
       }
 
-      return tx.purchase.update({
+      return tx.purchase.findUnique({
         where: { id: purchase.id },
-        data: {
-          status: 'RECEIVED',
-          receivedAt,
-        },
         include: {
           supplier: true,
           items: buildPurchaseItemSelect(kiosk.id),
